@@ -1,0 +1,124 @@
+/* ─── Dark / Light mode transitions ─────────────────────────────────────── */
+
+/* Smooth colour transitions on everything */
+*, *::before, *::after {
+    transition: background-color 0.25s ease, color 0.15s ease, border-color 0.2s ease;
+}
+
+/* ─── Dropdown overrides ─────────────────────────────────────────────────── */
+/* Dash dropdowns use react-select which injects its own colours.
+   Target #root-container because that's where we toggle the class. */
+#root-container.light-mode .Select-control,
+#root-container.light-mode .Select-menu-outer,
+#root-container.light-mode .Select-option {
+    background-color: #ffffff !important;
+    color: #1c1e21 !important;
+    border-color: #d0d7de !important;
+}
+#root-container.light-mode .Select-value-label,
+#root-container.light-mode .Select-placeholder {
+    color: #1c1e21 !important;
+}
+#root-container.light-mode .Select-option.is-focused {
+    background-color: #e8eef4 !important;
+}
+#root-container.light-mode .Select-arrow-zone .Select-arrow {
+    border-top-color: #57606a !important;
+}
+
+/* Dark-mode dropdowns (explicit, so toggling back works) */
+#root-container.dark-mode .Select-control,
+#root-container.dark-mode .Select-menu-outer,
+#root-container.dark-mode .Select-option {
+    background-color: #0d1117 !important;
+    color: #e6edf3 !important;
+    border-color: #21262d !important;
+}
+#root-container.dark-mode .Select-value-label,
+#root-container.dark-mode .Select-placeholder {
+    color: #e6edf3 !important;
+}
+#root-container.dark-mode .Select-option.is-focused {
+    background-color: #21262d !important;
+}
+#root-container.dark-mode .Select-arrow-zone .Select-arrow {
+    border-top-color: #8b949e !important;
+}
+
+/* ─── Light-mode overrides for static layout panels ─────────────────────── */
+/* Panels (the main content containers on each page) */
+#root-container.light-mode .theme-panel {
+    background-color: #ffffff !important;
+    border-color:     #d0d7de !important;
+}
+
+/* Text inputs */
+#root-container.light-mode .theme-input,
+#root-container.light-mode .theme-input input {
+    background-color: #f6f8fa !important;
+    color:            #1c1e21 !important;
+    border-color:     #d0d7de !important;
+}
+#root-container.light-mode .theme-input::placeholder {
+    color: #8c959f !important;
+}
+
+/* Section-title labels (muted uppercase headers) */
+#root-container.light-mode .theme-label {
+    color: #57606a !important;
+}
+/* Accent-coloured labels — keep accent but use the lighter shade */
+#root-container.light-mode .theme-label-accent {
+    color: #d4940a !important;
+}
+#root-container.light-mode .theme-label-green {
+    color: #1a7f37 !important;
+}
+#root-container.light-mode .theme-label-blue {
+    color: #0969da !important;
+}
+
+/* Muted helper text */
+#root-container.light-mode .theme-muted {
+    color: #8c959f !important;
+}
+
+/* Sub-text */
+#root-container.light-mode .theme-subtext {
+    color: #57606a !important;
+}
+
+/* Normal text */
+#root-container.light-mode .theme-text {
+    color: #1c1e21 !important;
+}
+
+/* Outline buttons */
+#root-container.light-mode .theme-btn-outline-red {
+    color:        #cf222e !important;
+    border-color: #cf222e !important;
+}
+#root-container.light-mode .theme-btn-outline-green {
+    color:        #1a7f37 !important;
+    border-color: #1a7f37 !important;
+}
+
+/* Pills (ticker badges in watchlist) */
+#root-container.light-mode .theme-pill {
+    background-color: #d0d7de !important;
+}
+
+/* ─── Toggle button ─────────────────────────────────────────────────────── */
+#theme-toggle {
+    cursor: pointer;
+    font-size: 1.35rem;
+    line-height: 1;
+    padding: 0.35rem 0.55rem;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    transition: transform 0.25s ease;
+}
+#theme-toggle:hover {
+    transform: scale(1.15);
+}
