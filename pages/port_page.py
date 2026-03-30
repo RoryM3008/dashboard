@@ -13,6 +13,36 @@ def build_port_section(LBL, PANEL, C, FONT):
             html.Div(id="port-overview",
                      style={"display": "flex", "gap": "0.75rem", "flexWrap": "wrap",
                             "marginTop": "0.5rem"}),
+            # ── Set Cash balance ──
+            html.Div([
+                html.Div("Set Cash Balance", style={**LBL, "fontSize": "0.65rem",
+                         "marginRight": "0.5rem", "color": C["muted"]},
+                         className="theme-label"),
+                dcc.Input(id="port-cash-input", type="number",
+                          placeholder="e.g. 5000", step=0.01,
+                          className="theme-input",
+                          style={"backgroundColor": C["bg"],
+                                 "border": f"1px solid {C['border']}",
+                                 "borderRadius": "8px", "color": C["text"],
+                                 "padding": "0.35rem 0.6rem", "fontFamily": FONT,
+                                 "fontSize": "0.78rem", "width": "110px",
+                                 "outline": "none"}),
+                html.Button("Set", id="port-cash-set", n_clicks=0, style={
+                    "backgroundColor": C["blue"], "color": "#fff", "border": "none",
+                    "borderRadius": "8px", "padding": "0.35rem 0.8rem",
+                    "fontFamily": FONT, "fontWeight": "700", "fontSize": "0.78rem",
+                    "cursor": "pointer"}),
+                html.Button("Clear", id="port-cash-clear", n_clicks=0, style={
+                    "backgroundColor": "transparent", "color": C["muted"],
+                    "border": f"1px solid {C['border']}",
+                    "borderRadius": "8px", "padding": "0.35rem 0.8rem",
+                    "fontFamily": FONT, "fontWeight": "600", "fontSize": "0.78rem",
+                    "cursor": "pointer"}),
+                html.Span(id="port-cash-status", style={"color": C["muted"],
+                          "fontSize": "0.72rem", "fontFamily": FONT,
+                          "marginLeft": "0.5rem"}),
+            ], style={"display": "flex", "alignItems": "center", "gap": "0.4rem",
+                      "marginTop": "0.6rem"}),
         ], style=PANEL, className="theme-panel"),
 
         # ── Add Transaction form ──────────────────────────────────────────

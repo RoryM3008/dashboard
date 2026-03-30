@@ -14,6 +14,7 @@ from portfolio import (
     load_transactions, add_transaction, delete_transaction,
     clear_all_transactions,
     import_csv, export_csv, compute_holdings, compute_portfolio_ts,
+    set_cash_override, get_cash_override, clear_cash_override,
 )
 
 _COLOURS = [
@@ -408,6 +409,42 @@ def register_callbacks(app):
         clear_all_transactions()
         return (trigger or 0) + 1, "✓ All transactions cleared."
 
+    # ── 2c) Set cash override ────────────────────────────────────────
+    @app.callback(
+        Output("port-refresh-trigger", "data", allow_duplicate=True),
+        Output("port-cash-status", "children"),
+        Output("port-cash-input", "value"),
+        Input("port-cash-set", "n_clicks"),
+        State("port-cash-input", "value"),
+        State("port-refresh-trigger", "data"),
+        prevent_initial_call=True,
+    )
+    def set_cash(n, amount, trigger):
+        if not n:
+            return no_update, no_update, no_update
+        if amount is None:
+            return no_update, "⚠ Enter a cash amount.", no_update
+        try:
+            val = float(amount)
+        except (ValueError, TypeError):
+            return no_update, "⚠ Must be a number.", no_update
+        set_cash_override(val)
+        return (trigger or 0) + 1, f"✓ Cash set to £{val:,.2f}", None
+
+    # ── 2d) Clear cash override ──────────────────────────────────────
+    @app.callback(
+        Output("port-refresh-trigger", "data", allow_duplicate=True),
+        Output("port-cash-status", "children", allow_duplicate=True),
+        Input("port-cash-clear", "n_clicks"),
+        State("port-refresh-trigger", "data"),
+        prevent_initial_call=True,
+    )
+    def clear_cash(n, trigger):
+        if not n:
+            return no_update, no_update
+        clear_cash_override()
+        return (trigger or 0) + 1, "✓ Cash override removed — using calculated value."
+
     # ── 3) CSV import ─────────────────────────────────────────────────────
     @app.callback(
         Output("port-refresh-trigger", "data", allow_duplicate=True),
@@ -488,13 +525,14 @@ def register_callbacks(app):
         tp_col = c["green"] if tp >= 0 else c["red"]
         ret_col = c["green"] if ret_pct >= 0 else c["red"]
         income = total_div + total_int
+        cash_label = "Cash ✎" if summary.get("cash_overridden") else "Cash"
         overview = [
             _metric_card("Portfolio Value", f"£{pv:,.2f}", c["text"], c),
             _metric_card("Market Value", f"£{mv:,.2f}", c["text"], c),
             _metric_card("Net Invested", f"£{net_inv:,.2f}", c["blue"], c),
             _metric_card("Total P&L", f"£{tp:,.2f}", tp_col, c),
             _metric_card("Return", f"{ret_pct:+.2f}%", ret_col, c),
-            _metric_card("Cash", f"£{cash:,.2f}",
+            _metric_card(cash_label, f"£{cash:,.2f}",
                          c["red"] if cash < 0 else c["text"], c),
             _metric_card("Dividends", f"£{total_div:,.2f}", c["green"], c),
             _metric_card("Interest", f"£{total_int:,.2f}", c["green"], c),

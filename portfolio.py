@@ -184,6 +184,42 @@ def clear_all_transactions():
         con.execute("DELETE FROM transactions")
 
 
+def _init_cash_override_table():
+    """Create the cash_override table if needed."""
+    with _conn() as con:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS cash_override (
+                id    INTEGER PRIMARY KEY CHECK(id = 1),
+                value REAL NOT NULL
+            )
+        """)
+
+
+def set_cash_override(amount):
+    """Store a manual cash balance override (GBP)."""
+    _init_cash_override_table()
+    with _conn() as con:
+        con.execute(
+            "INSERT OR REPLACE INTO cash_override (id, value) VALUES (1, ?)",
+            (float(amount),),
+        )
+
+
+def get_cash_override():
+    """Return the cash override value, or None if not set."""
+    _init_cash_override_table()
+    with _conn() as con:
+        row = con.execute("SELECT value FROM cash_override WHERE id = 1").fetchone()
+    return row[0] if row else None
+
+
+def clear_cash_override():
+    """Remove the cash override so calculated cash is used."""
+    _init_cash_override_table()
+    with _conn() as con:
+        con.execute("DELETE FROM cash_override")
+
+
 def import_csv(csv_text):
     """Bulk-insert transactions from CSV text. Returns count inserted."""
     df = pd.read_csv(io.StringIO(csv_text))
@@ -446,12 +482,18 @@ def compute_holdings(txns_df, last_prices=None):
         holdings_df["weight_pct"] = 0.0
 
     total_pnl = holdings_df["total_pnl"].sum() or 0
-    portfolio_value = total_mv + cash
+
+    # Use cash override if user has set one
+    cash_ov = get_cash_override()
+    display_cash = cash_ov if cash_ov is not None else cash
+    portfolio_value = total_mv + display_cash
 
     summary = {
         "total_mv": round(total_mv, 2),
         "total_pnl": round(total_pnl, 2),
-        "cash": round(cash, 2),
+        "cash": round(display_cash, 2),
+        "cash_calculated": round(cash, 2),
+        "cash_overridden": cash_ov is not None,
         "portfolio_value": round(portfolio_value, 2),
         "net_invested": round(net_invested, 2),
         "total_deposited": round(total_dep, 2),
@@ -601,6 +643,14 @@ def compute_portfolio_ts(txns_df):
                         mv += shares * px.iloc[-1] / day_fx  # USD / GBPUSD → GBP
 
         daily_values.append({"date": dt, "portfolio_value": cash + mv})
+
+    # Apply cash override to the latest day if set
+    cash_ov = get_cash_override()
+    if cash_ov is not None and daily_values:
+        last = daily_values[-1]
+        # Replace the calculated cash with override for today's value
+        last_mv = last["portfolio_value"] - cash  # extract market value
+        daily_values[-1] = {"date": last["date"], "portfolio_value": cash_ov + last_mv}
 
     ts_df = pd.DataFrame(daily_values).set_index("date")
 
