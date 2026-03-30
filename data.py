@@ -43,14 +43,22 @@ def fetch_earnings(tickers):
             if ts:
                 dt = datetime.date.fromtimestamp(ts)
                 if today <= dt <= cutoff:
+                    # EPS fields
+                    exp_eps = info.get("earningsEstimate") or info.get("forwardEps")
+                    last_eps = info.get("trailingEps")
+                    sector = info.get("sector", "—")
+
                     rows.append({"Ticker": ticker,
+                                 "Sector": sector or "—",
                                  "Earnings Date": dt.strftime("%d %b %Y"),
                                  "Days Away": (dt - today).days,
+                                 "Est EPS": round(float(exp_eps), 2) if exp_eps is not None else None,
+                                 "Last EPS": round(float(last_eps), 2) if last_eps is not None else None,
                                  "_date": dt})
         except Exception:
             pass
     if not rows:
-        return pd.DataFrame(columns=["Ticker", "Earnings Date", "Days Away"])
+        return pd.DataFrame(columns=["Ticker", "Sector", "Earnings Date", "Days Away", "Est EPS", "Last EPS"])
     df = pd.DataFrame(rows).sort_values("_date")
     return df.drop(columns=["_date"]).reset_index(drop=True)
 
@@ -95,20 +103,77 @@ def fetch_index_data():
 
 
 def fetch_news(tickers, max_per=3):
-    articles = []
+    """
+    Fetch news from multiple RSS sources in parallel.
+    Returns a dict: {"stock": [...], "general": [...], "all": [...]}.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    seen_titles = set()
+    stock_articles = []
+    general_articles = []
+
+    # Build job list: (url, source, ticker_or_None, max_entries)
+    jobs = []
     for ticker in tickers:
-        url = (f"https://feeds.finance.yahoo.com/rss/2.0/headline"
-               f"?s={ticker}&region=US&lang=en-US")
+        jobs.append((
+            f"https://feeds.finance.yahoo.com/rss/2.0/headline"
+            f"?s={ticker}&region=US&lang=en-US", "Yahoo", ticker, max_per))
+        jobs.append((
+            f"https://news.google.com/rss/search?q={ticker}+stock&hl=en-US&gl=US&ceid=US:en",
+            "Google", ticker, max_per))
+
+    general_feeds = [
+        ("https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
+         "CNBC", None, 5),
+        ("https://feeds.marketwatch.com/marketwatch/topstories",
+         "MarketWatch", None, 5),
+        ("https://feeds.bloomberg.com/markets/news.rss",
+         "Bloomberg", None, 5),
+        ("https://seekingalpha.com/market_currents.xml",
+         "SeekingAlpha", None, 5),
+        ("https://www.rss.reuters.com/news/economy",
+         "Reuters", None, 5),
+    ]
+    jobs.extend(general_feeds)
+
+    def _fetch_one(url, source, ticker, limit):
         try:
             feed = feedparser.parse(url)
-            for entry in feed.entries[:max_per]:
-                articles.append({"ticker":    ticker,
-                                  "title":     entry.get("title", ""),
-                                  "link":      entry.get("link", "#"),
-                                  "published": entry.get("published", "")})
+            results = []
+            for entry in feed.entries[:limit]:
+                title = entry.get("title", "")
+                if title:
+                    results.append({
+                        "ticker":    ticker or "MKT",
+                        "title":     title,
+                        "link":      entry.get("link", "#"),
+                        "published": entry.get("published", ""),
+                        "source":    source,
+                        "_is_stock": ticker is not None,
+                    })
+            return results
         except Exception:
-            pass
-    return articles
+            return []
+
+    # Fetch all feeds concurrently (max 20 threads)
+    all_results = []
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        futures = {pool.submit(_fetch_one, *job): job for job in jobs}
+        for future in as_completed(futures):
+            all_results.extend(future.result())
+
+    # Deduplicate and split
+    for a in all_results:
+        if a["title"] not in seen_titles:
+            seen_titles.add(a["title"])
+            if a["_is_stock"]:
+                stock_articles.append(a)
+            else:
+                general_articles.append(a)
+
+    combined = stock_articles + general_articles
+    return {"stock": stock_articles, "general": general_articles, "all": combined}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

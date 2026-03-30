@@ -1,0 +1,553 @@
+"""Callback — Portfolio: transaction CRUD, holdings, overview, performance chart."""
+
+import base64
+import json
+from datetime import date
+
+import dash
+import pandas as pd
+import plotly.graph_objects as go
+from dash import dcc, html, Input, Output, State, ALL, no_update
+
+from theme import FONT, get_theme
+from portfolio import (
+    load_transactions, add_transaction, delete_transaction,
+    clear_all_transactions,
+    import_csv, export_csv, compute_holdings, compute_portfolio_ts,
+)
+
+_COLOURS = [
+    "#ff8c00", "#4296f5", "#00d26a", "#ff3333", "#a855f7",
+    "#e91e8f", "#06b6d4", "#eab308", "#6366f1", "#14b8a6",
+]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Render helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _metric_card(label, value, colour, c):
+    return html.Div([
+        html.Div(label, style={"color": c["subtext"], "fontSize": "0.65rem",
+                                "fontFamily": FONT, "textTransform": "uppercase",
+                                "letterSpacing": "0.05em", "marginBottom": "2px"}),
+        html.Div(value, style={"color": colour, "fontSize": "1.15rem",
+                                "fontWeight": "700", "fontFamily": FONT}),
+    ], style={"backgroundColor": c["bg"], "border": f"1px solid {c['border']}",
+              "borderRadius": "10px", "padding": "0.75rem 1rem",
+              "minWidth": "140px", "flex": "1"})
+
+
+def _render_ledger(txns_df, c):
+    """Render the transaction ledger as an HTML table with delete buttons."""
+    if txns_df.empty:
+        return html.Div("No transactions yet. Add one above.",
+                        style={"color": c["muted"], "fontSize": "0.82rem", "fontFamily": FONT})
+
+    th_s = {
+        "padding": "0.3rem 0.5rem", "fontSize": "0.6rem", "fontWeight": "700",
+        "textTransform": "uppercase", "letterSpacing": "0.05em",
+        "borderBottom": f"2px solid {c['border']}", "fontFamily": FONT,
+        "color": c["muted"], "whiteSpace": "nowrap",
+    }
+    td_s = {
+        "padding": "0.3rem 0.5rem", "fontSize": "0.75rem", "fontFamily": FONT,
+        "color": c["text"], "borderBottom": f"1px solid {c['border']}",
+        "whiteSpace": "nowrap",
+    }
+
+    cols = ["date", "ticker", "side", "quantity", "price", "fx_rate", "fees", "notes"]
+    header = html.Thead(html.Tr(
+        [html.Th("", style={**th_s, "width": "55px"})] +
+        [html.Th(col.upper().replace("FX_RATE", "FX"), style={**th_s,
+                 "textAlign": "right" if col in ("quantity", "price", "fx_rate", "fees") else "left"})
+         for col in cols]
+    ))
+
+    rows = []
+    for _, tx in txns_df.iterrows():
+        side = tx["side"]
+        is_cash_flow = side in ("DEPOSIT", "WITHDRAW", "INTEREST")
+        is_dividend = side == "DIVIDEND"
+
+        if side == "DEPOSIT":
+            side_col = c["blue"]
+        elif side == "WITHDRAW":
+            side_col = c["accent"]
+        elif side == "DIVIDEND":
+            side_col = c["green"]
+        elif side == "INTEREST":
+            side_col = c["blue"]
+        elif side == "BUY":
+            side_col = c["green"]
+        else:
+            side_col = c["red"]
+
+        # Format date as dd-mm-yyyy for display
+        try:
+            from datetime import datetime as _dt
+            display_date = _dt.strptime(tx["date"].strip(), "%Y-%m-%d").strftime("%d-%m-%Y")
+        except Exception:
+            display_date = tx["date"]
+
+        # For cash-flow types: show amount in price col, dash for qty
+        qty_text = "—" if (is_cash_flow or is_dividend) else f"{float(tx['quantity']):,.2f}"
+        ticker_text = tx["ticker"] if (is_dividend or not is_cash_flow) else "—"
+        fx_val = float(tx.get("fx_rate", 1.0) or 1.0)
+        # Show price in original currency, £ for GBP amounts
+        if is_cash_flow:
+            price_text = f"£{float(tx['price']):,.2f}"
+        else:
+            price_text = f"${float(tx['price']):,.2f}"
+        fx_text = f"{fx_val:.4f}"
+
+        rows.append(html.Tr([
+            html.Td(
+                html.Div([
+                    html.Button("✎", id={"type": "port-txn-edit", "id": tx["id"]},
+                                n_clicks=0, style={
+                        "background": "none", "border": "none", "color": c["blue"],
+                        "cursor": "pointer", "fontWeight": "700", "fontSize": "0.75rem",
+                        "padding": "0", "lineHeight": "1", "marginRight": "6px"}),
+                    html.Button("✕", id={"type": "port-txn-del", "id": tx["id"]},
+                                n_clicks=0, style={
+                        "background": "none", "border": "none", "color": c["red"],
+                        "cursor": "pointer", "fontWeight": "700", "fontSize": "0.75rem",
+                        "padding": "0", "lineHeight": "1"}),
+                ], style={"display": "flex", "gap": "2px"}),
+                style={**td_s, "width": "55px"}),
+            html.Td(display_date, style={**td_s, "fontWeight": "600"}),
+            html.Td(ticker_text, style={**td_s, "color": c["accent"] if (not is_cash_flow or is_dividend) else c["subtext"],
+                                         "fontWeight": "700"}),
+            html.Td(side, style={**td_s, "color": side_col, "fontWeight": "700"}),
+            html.Td(qty_text, style={**td_s, "textAlign": "right"}),
+            html.Td(price_text, style={**td_s, "textAlign": "right"}),
+            html.Td(fx_text, style={**td_s, "textAlign": "right", "color": c["subtext"]}),
+            html.Td(f"£{float(tx['fees']):,.2f}", style={**td_s, "textAlign": "right"}),
+            html.Td(tx.get("notes", ""), style={**td_s, "color": c["subtext"]}),
+        ]))
+
+    return html.Table([header, html.Tbody(rows)],
+                      style={"width": "100%", "borderCollapse": "collapse"})
+
+
+def _render_holdings(hdf, summary, c):
+    """Render the holdings summary table."""
+    if hdf.empty:
+        return html.Div("No open positions.",
+                        style={"color": c["muted"], "fontSize": "0.82rem", "fontFamily": FONT})
+
+    th_s = {
+        "padding": "0.3rem 0.5rem", "fontSize": "0.6rem", "fontWeight": "700",
+        "textTransform": "uppercase", "letterSpacing": "0.05em",
+        "borderBottom": f"2px solid {c['border']}", "fontFamily": FONT,
+        "color": c["muted"], "whiteSpace": "nowrap",
+    }
+    td_s = {
+        "padding": "0.3rem 0.5rem", "fontSize": "0.75rem", "fontFamily": FONT,
+        "color": c["text"], "borderBottom": f"1px solid {c['border']}",
+        "whiteSpace": "nowrap",
+    }
+
+    col_labels = ["Ticker", "Shares", "Avg Cost", "Last", "Mkt Value",
+                  "Unreal P&L", "Unreal %", "Real P&L", "Divs", "Total P&L", "Weight"]
+
+    header = html.Thead(html.Tr([
+        html.Th(col, style={**th_s,
+                "textAlign": "left" if col == "Ticker" else "right"})
+        for col in col_labels
+    ]))
+
+    rows = []
+    for _, h in hdf.iterrows():
+        u_pnl = h.get("unrealized_pnl")
+        u_pct = h.get("unrealized_pnl_pct")
+        t_pnl = h.get("total_pnl")
+
+        u_col = c["green"] if (u_pnl or 0) >= 0 else c["red"]
+        t_col = c["green"] if (t_pnl or 0) >= 0 else c["red"]
+
+        def _f(v, prefix="£"):
+            if v is None:
+                return "—"
+            return f"{prefix}{v:,.2f}"
+
+        rows.append(html.Tr([
+            html.Td(h["ticker"], style={**td_s, "color": c["accent"], "fontWeight": "700"}),
+            html.Td(f"{h['shares']:,.2f}", style={**td_s, "textAlign": "right"}),
+            html.Td(f"£{h['avg_cost']:,.2f}", style={**td_s, "textAlign": "right"}),
+            html.Td(_f(h["last_price"]), style={**td_s, "textAlign": "right"}),
+            html.Td(_f(h["market_value"]), style={**td_s, "textAlign": "right"}),
+            html.Td(_f(u_pnl), style={**td_s, "textAlign": "right", "color": u_col,
+                                       "fontWeight": "600"}),
+            html.Td(f"{u_pct:+.1f}%" if u_pct is not None else "—",
+                     style={**td_s, "textAlign": "right", "color": u_col}),
+            html.Td(_f(h["realized_pnl"]), style={**td_s, "textAlign": "right"}),
+            html.Td(_f(h.get("dividend_income", 0)), style={**td_s, "textAlign": "right",
+                                                             "color": c["green"]}),
+            html.Td(_f(t_pnl), style={**td_s, "textAlign": "right", "color": t_col,
+                                       "fontWeight": "700"}),
+            html.Td(f"{h['weight_pct']:.1f}%", style={**td_s, "textAlign": "right"}),
+        ]))
+
+    return html.Table([header, html.Tbody(rows)],
+                      style={"width": "100%", "borderCollapse": "collapse"})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Callbacks
+# ─────────────────────────────────────────────────────────────────────────────
+
+def register_callbacks(app):
+
+    # ── 1) Add transaction ────────────────────────────────────────────────
+    @app.callback(
+        Output("port-refresh-trigger", "data", allow_duplicate=True),
+        Output("port-txn-status", "children"),
+        Output("port-txn-ticker", "value"),
+        Output("port-txn-qty",    "value"),
+        Output("port-txn-price",  "value"),
+        Output("port-txn-fx",     "value"),
+        Output("port-txn-notes",  "value"),
+        Input("port-txn-add", "n_clicks"),
+        State("port-txn-date",   "value"),
+        State("port-txn-ticker", "value"),
+        State("port-txn-side",   "value"),
+        State("port-txn-qty",    "value"),
+        State("port-txn-price",  "value"),
+        State("port-txn-fx",     "value"),
+        State("port-txn-fees",   "value"),
+        State("port-txn-notes",  "value"),
+        State("port-refresh-trigger", "data"),
+        prevent_initial_call=True,
+    )
+    def add_txn(n, txn_date, ticker, side, qty, price, fx_rate, fees, notes, trigger):
+        # Parse dd-mm-yyyy → ISO yyyy-mm-dd for storage
+        def _parse_date(d):
+            from datetime import datetime as _dt
+            for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d"):
+                try:
+                    return _dt.strptime(d.strip(), fmt).strftime("%Y-%m-%d")
+                except ValueError:
+                    continue
+            return None
+
+        # DEPOSIT / WITHDRAW / INTEREST — need date + amount only
+        if side in ("DEPOSIT", "WITHDRAW", "INTEREST"):
+            if not txn_date or not price:
+                return no_update, "⚠ Fill in date and amount.", no_update, no_update, no_update, no_update, no_update
+            iso_date = _parse_date(txn_date)
+            if not iso_date:
+                return no_update, "⚠ Date format must be DD-MM-YYYY.", no_update, no_update, no_update, no_update, no_update
+            try:
+                price = float(price)
+            except (ValueError, TypeError):
+                return no_update, "⚠ Amount must be a number.", no_update, no_update, no_update, no_update, no_update
+            if price <= 0:
+                return no_update, "⚠ Amount must be > 0.", no_update, no_update, no_update, no_update, no_update
+
+            add_transaction(iso_date, "CASH", side, 0, price, 0, notes, fx_rate=1.0)
+            label = {"DEPOSIT": "Deposited", "WITHDRAW": "Withdrawn", "INTEREST": "Interest received"}[side]
+            return ((trigger or 0) + 1,
+                    f"✓ {label} £{price:,.2f}",
+                    "", None, None, 1.0, "")
+
+        # DIVIDEND — need date + ticker + amount
+        if side == "DIVIDEND":
+            if not txn_date or not ticker or not price:
+                return no_update, "⚠ Fill in date, ticker, and amount.", no_update, no_update, no_update, no_update, no_update
+            iso_date = _parse_date(txn_date)
+            if not iso_date:
+                return no_update, "⚠ Date format must be DD-MM-YYYY.", no_update, no_update, no_update, no_update, no_update
+            try:
+                price = float(price)
+                fx_val = float(fx_rate or 1.0)
+            except (ValueError, TypeError):
+                return no_update, "⚠ Amount and FX rate must be numbers.", no_update, no_update, no_update, no_update, no_update
+            if price <= 0:
+                return no_update, "⚠ Amount must be > 0.", no_update, no_update, no_update, no_update, no_update
+
+            add_transaction(iso_date, ticker, side, 0, price, 0, notes, fx_rate=fx_val)
+            return ((trigger or 0) + 1,
+                    f"✓ Dividend £{price * fx_val:,.2f} from {ticker.upper().strip()}",
+                    "", None, None, 1.0, "")
+
+        # BUY / SELL — need date, ticker, qty, price
+        if not txn_date or not ticker or not qty or not price:
+            return no_update, "⚠ Fill in date, ticker, quantity, and price.", no_update, no_update, no_update, no_update, no_update
+
+        iso_date = _parse_date(txn_date)
+        if not iso_date:
+            return no_update, "⚠ Date format must be DD-MM-YYYY.", no_update, no_update, no_update, no_update, no_update
+
+        try:
+            qty = float(qty)
+            price = float(price)
+            fees = float(fees or 0)
+            fx_val = float(fx_rate or 1.0)
+        except (ValueError, TypeError):
+            return no_update, "⚠ Quantity, price, fees, and FX rate must be numbers.", no_update, no_update, no_update, no_update, no_update
+
+        if qty <= 0 or price < 0:
+            return no_update, "⚠ Quantity must be > 0, price ≥ 0.", no_update, no_update, no_update, no_update, no_update
+
+        # For SELLs, check we have enough shares
+        if side == "SELL":
+            txns = load_transactions()
+            if not txns.empty:
+                t_upper = ticker.upper().strip()
+                t_txns = txns[txns["ticker"] == t_upper]
+                buys = t_txns[t_txns["side"] == "BUY"]["quantity"].sum()
+                sells = t_txns[t_txns["side"] == "SELL"]["quantity"].sum()
+                current_shares = buys - sells
+                if qty > current_shares + 0.001:
+                    return (no_update,
+                            f"⚠ Cannot sell {qty} shares of {t_upper} — only {current_shares:.2f} held.",
+                            no_update, no_update, no_update, no_update, no_update)
+
+        add_transaction(iso_date, ticker, side, qty, price, fees, notes, fx_rate=fx_val)
+        return ((trigger or 0) + 1,
+                f"✓ Added {side} {qty} {ticker.upper()} @ ${price:.2f} (FX: {fx_val})",
+                "", None, None, 1.0, "")
+
+    # ── 2) Delete transaction ─────────────────────────────────────────────
+    @app.callback(
+        Output("port-refresh-trigger", "data", allow_duplicate=True),
+        Input({"type": "port-txn-del", "id": ALL}, "n_clicks"),
+        State("port-refresh-trigger", "data"),
+        prevent_initial_call=True,
+    )
+    def del_txn(n_clicks_list, trigger):
+        ctx = dash.callback_context
+        if not ctx.triggered:
+            return no_update
+        prop = ctx.triggered[0]["prop_id"]
+        if ctx.triggered[0]["value"] is None or ctx.triggered[0]["value"] == 0:
+            return no_update
+        try:
+            btn_id = json.loads(prop.split(".")[0])
+            delete_transaction(btn_id["id"])
+            return (trigger or 0) + 1
+        except Exception:
+            return no_update
+
+    # ── 2a-edit) Edit transaction (populate form + delete old) ─────────
+    @app.callback(
+        Output("port-txn-date",    "value"),
+        Output("port-txn-ticker",  "value", allow_duplicate=True),
+        Output("port-txn-side",    "value"),
+        Output("port-txn-qty",     "value", allow_duplicate=True),
+        Output("port-txn-price",   "value", allow_duplicate=True),
+        Output("port-txn-fx",      "value", allow_duplicate=True),
+        Output("port-txn-fees",    "value"),
+        Output("port-txn-notes",   "value", allow_duplicate=True),
+        Output("port-txn-status",  "children", allow_duplicate=True),
+        Output("port-refresh-trigger", "data", allow_duplicate=True),
+        Input({"type": "port-txn-edit", "id": ALL}, "n_clicks"),
+        State("port-refresh-trigger", "data"),
+        prevent_initial_call=True,
+    )
+    def edit_txn(n_clicks_list, trigger):
+        ctx = dash.callback_context
+        if not ctx.triggered:
+            return (no_update,) * 10
+        prop = ctx.triggered[0]["prop_id"]
+        if ctx.triggered[0]["value"] is None or ctx.triggered[0]["value"] == 0:
+            return (no_update,) * 10
+        try:
+            btn_id = json.loads(prop.split(".")[0])
+            txn_id = btn_id["id"]
+            # Load the transaction data before deleting
+            txns = load_transactions()
+            row = txns[txns["id"] == txn_id]
+            if row.empty:
+                return (no_update,) * 10
+            tx = row.iloc[0]
+            # Parse date to DD-MM-YYYY for form display
+            try:
+                from datetime import datetime as _dt
+                display_date = _dt.strptime(str(tx["date"]).strip(), "%Y-%m-%d").strftime("%d-%m-%Y")
+            except Exception:
+                display_date = tx["date"]
+            # Delete the old transaction
+            delete_transaction(txn_id)
+            # Populate form fields
+            side = tx["side"]
+            ticker = tx["ticker"] if tx["ticker"] != "CASH" else ""
+            qty = float(tx["quantity"]) if float(tx["quantity"]) > 0 else None
+            price = float(tx["price"])
+            fx = float(tx.get("fx_rate", 1.0) or 1.0)
+            fees = float(tx.get("fees", 0) or 0)
+            notes = tx.get("notes", "") or ""
+            return (
+                display_date,
+                ticker,
+                side,
+                qty,
+                price,
+                fx,
+                fees,
+                notes,
+                f"✎ Editing {side} {ticker or 'CASH'} — modify and click + Add",
+                (trigger or 0) + 1,
+            )
+        except Exception:
+            return (no_update,) * 10
+
+    # ── 2b) Clear all transactions ────────────────────────────────────────
+    @app.callback(
+        Output("port-refresh-trigger", "data", allow_duplicate=True),
+        Output("port-txn-status", "children", allow_duplicate=True),
+        Input("port-clear-all", "n_clicks"),
+        State("port-refresh-trigger", "data"),
+        prevent_initial_call=True,
+    )
+    def clear_all(n, trigger):
+        if not n:
+            return no_update, no_update
+        clear_all_transactions()
+        return (trigger or 0) + 1, "✓ All transactions cleared."
+
+    # ── 3) CSV import ─────────────────────────────────────────────────────
+    @app.callback(
+        Output("port-refresh-trigger", "data", allow_duplicate=True),
+        Output("port-txn-status", "children", allow_duplicate=True),
+        Input("port-csv-upload", "contents"),
+        State("port-csv-upload", "filename"),
+        State("port-refresh-trigger", "data"),
+        prevent_initial_call=True,
+    )
+    def csv_import(contents, filename, trigger):
+        if contents is None:
+            return no_update, no_update
+        try:
+            _, content_string = contents.split(",")
+            decoded = base64.b64decode(content_string).decode("utf-8")
+            count = import_csv(decoded)
+            return (trigger or 0) + 1, f"✓ Imported {count} transactions from {filename}"
+        except Exception as e:
+            return no_update, f"⚠ Import error: {e}"
+
+    # ── 4) CSV export ─────────────────────────────────────────────────────
+    @app.callback(
+        Output("port-csv-download", "data"),
+        Input("port-csv-export", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def csv_export(n):
+        csv_str = export_csv()
+        return dcc.send_string(csv_str, "portfolio_transactions.csv")
+
+    # ── 5) Master render: ledger + holdings + overview + chart ────────────
+    @app.callback(
+        Output("port-ledger-table",   "children"),
+        Output("port-holdings-table", "children"),
+        Output("port-overview",       "children"),
+        Output("port-chart",          "children"),
+        Input("port-refresh-trigger", "data"),
+        Input("port-refresh",         "n_clicks"),
+        Input("port-chart-mode",      "value"),
+        State("theme-store",          "data"),
+    )
+    def render_all(trigger, n_refresh, chart_mode, theme_mode):
+        c = get_theme(theme_mode or "dark")
+
+        txns = load_transactions()
+
+        # Ledger
+        ledger_html = _render_ledger(txns, c)
+
+        if txns.empty:
+            empty = html.Div("Add transactions to see holdings and performance.",
+                             style={"color": c["muted"], "fontSize": "0.82rem",
+                                    "fontFamily": FONT})
+            overview = [
+                _metric_card("Portfolio Value", "£0.00", c["text"], c),
+                _metric_card("Net Invested", "£0.00", c["text"], c),
+                _metric_card("Total P&L", "£0.00", c["text"], c),
+                _metric_card("Cash", "£0.00", c["text"], c),
+            ]
+            return ledger_html, empty, overview, html.Div()
+
+        # Holdings
+        hdf, summary = compute_holdings(txns)
+
+        holdings_html = _render_holdings(hdf, summary, c)
+
+        # Overview cards
+        pv = summary["portfolio_value"]
+        tp = summary["total_pnl"]
+        cash = summary["cash"]
+        mv = summary["total_mv"]
+        net_inv = summary["net_invested"]
+        total_div = summary.get("total_dividends", 0)
+        total_int = summary.get("total_interest", 0)
+        # Return = (portfolio value - net invested) / net invested
+        ret_pct = ((pv - net_inv) / net_inv * 100) if net_inv > 0 else 0
+
+        tp_col = c["green"] if tp >= 0 else c["red"]
+        ret_col = c["green"] if ret_pct >= 0 else c["red"]
+        income = total_div + total_int
+        overview = [
+            _metric_card("Portfolio Value", f"£{pv:,.2f}", c["text"], c),
+            _metric_card("Market Value", f"£{mv:,.2f}", c["text"], c),
+            _metric_card("Net Invested", f"£{net_inv:,.2f}", c["blue"], c),
+            _metric_card("Total P&L", f"£{tp:,.2f}", tp_col, c),
+            _metric_card("Return", f"{ret_pct:+.2f}%", ret_col, c),
+            _metric_card("Cash", f"£{cash:,.2f}",
+                         c["red"] if cash < 0 else c["text"], c),
+            _metric_card("Dividends", f"£{total_div:,.2f}", c["green"], c),
+            _metric_card("Interest", f"£{total_int:,.2f}", c["green"], c),
+        ]
+
+        # Performance chart
+        chart_html = html.Div()
+        ts = compute_portfolio_ts(txns)
+        if not ts.empty:
+            fig = go.Figure()
+
+            if chart_mode == "value":
+                fig.add_trace(go.Scatter(
+                    x=ts.index, y=ts["portfolio_value"],
+                    mode="lines", name="Portfolio Value",
+                    line={"color": c["accent"], "width": 2},
+                    fill="tozeroy",
+                    fillcolor=f"rgba(255,140,0,0.08)",
+                    hovertemplate="£%{y:,.2f}<extra></extra>",
+                ))
+                y_title = "Portfolio Value (£)"
+            elif chart_mode == "return":
+                colour = c["green"] if ts["cumulative_return"].iloc[-1] >= 0 else c["red"]
+                fig.add_trace(go.Scatter(
+                    x=ts.index, y=ts["cumulative_return"],
+                    mode="lines", name="Cumulative Return",
+                    line={"color": colour, "width": 2},
+                    hovertemplate="%{y:.2f}%<extra></extra>",
+                ))
+                fig.add_hline(y=0, line_dash="solid", line_color=c["muted"], line_width=0.8)
+                y_title = "Cumulative Return (%)"
+            else:  # drawdown
+                fig.add_trace(go.Scatter(
+                    x=ts.index, y=ts["drawdown"],
+                    mode="lines", name="Drawdown",
+                    line={"color": c["red"], "width": 2},
+                    fill="tozeroy",
+                    fillcolor=f"rgba(255,51,51,0.1)",
+                    hovertemplate="%{y:.2f}%<extra></extra>",
+                ))
+                y_title = "Drawdown (%)"
+
+            fig.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font={"family": FONT, "color": c["text"], "size": 11},
+                margin={"l": 50, "r": 15, "t": 15, "b": 35},
+                height=350,
+                yaxis={"title": y_title, "gridcolor": c["border"],
+                       "zerolinecolor": c["muted"]},
+                xaxis={"gridcolor": c["border"]},
+                showlegend=False,
+            )
+            chart_html = dcc.Graph(figure=fig, config={"displayModeBar": False})
+
+        return ledger_html, holdings_html, overview, chart_html

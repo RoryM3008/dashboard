@@ -19,6 +19,7 @@ def register_callbacks(app):
         Output("menu-markets", "style"),
         Output("menu-prices", "style"),
         Output("menu-risk", "style"),
+        Output("menu-port", "style"),
         Output("section-dashboard", "style"),
         Output("section-news", "style"),
         Output("section-analyser", "style"),
@@ -29,6 +30,7 @@ def register_callbacks(app):
         Output("section-markets", "style"),
         Output("section-prices", "style"),
         Output("section-risk", "style"),
+        Output("section-port", "style"),
         Output("active-main-menu", "data"),
         Input("menu-dashboard", "n_clicks"),
         Input("menu-news", "n_clicks"),
@@ -40,10 +42,11 @@ def register_callbacks(app):
         Input("menu-markets", "n_clicks"),
         Input("menu-prices", "n_clicks"),
         Input("menu-risk", "n_clicks"),
+        Input("menu-port", "n_clicks"),
         Input("theme-store", "data"),
         State("active-main-menu", "data"),
     )
-    def set_main_menu(n_dashboard, n_news, n_analyser, n_screener, n_correlation, n_performance, n_watchlist, n_markets, n_prices, n_risk, theme_mode, current):
+    def set_main_menu(n_dashboard, n_news, n_analyser, n_screener, n_correlation, n_performance, n_watchlist, n_markets, n_prices, n_risk, n_port, theme_mode, current):
         ctx = dash.callback_context
         if not ctx.triggered:
             active = current or "dashboard"
@@ -58,7 +61,7 @@ def register_callbacks(app):
         btn = _main_menu_btn(c)
         btn_active = _main_menu_btn_active(c)
 
-        names = ["dashboard", "news", "analyser", "screener", "correlation", "performance", "watchlist", "markets", "prices", "risk"]
+        names = ["dashboard", "news", "analyser", "screener", "correlation", "performance", "watchlist", "markets", "prices", "risk", "port"]
         buttons  = [btn_active if n == active else btn for n in names]
         sections = [{"display": "block"} if n == active else {"display": "none"} for n in names]
 
