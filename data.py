@@ -6,6 +6,7 @@ No Dash app reference here; pure functions that return DataFrames or Dash compon
 import datetime
 import re
 
+import numpy as np
 import feedparser
 import pandas as pd
 import yfinance as yf
@@ -175,6 +176,94 @@ def run_screener(extra_tickers=None):
             continue
 
     return pd.DataFrame(rows)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Risk contribution (component contribution to tracking-error / volatility)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def risk_contrib(returns_df, weights_s):
+    """
+    Decompose portfolio volatility into per-asset contributions.
+
+    Parameters
+    ----------
+    returns_df : DataFrame  (dates × tickers, decimal returns)
+    weights_s  : Series     (tickers → weight, sums to 1)
+
+    Returns
+    -------
+    DataFrame with columns [weight, MCR, RC, pct_RC]
+    port_vol : float  (portfolio volatility, same units as returns)
+    """
+    # Align weights to columns, drop any that are missing
+    tickers = [t for t in returns_df.columns if t in weights_s.index]
+    returns_df = returns_df[tickers].dropna(how="all")
+    w = weights_s.reindex(tickers).fillna(0)
+    if w.sum() > 0:
+        w = w / w.sum()
+
+    cov = returns_df.cov()                       # sample covariance Σ
+    w_arr = w.values                              # (N,)
+    sigma_w = cov.values @ w_arr                  # Σ·w  → (N,)
+    port_var = float(w_arr @ sigma_w)             # w'·Σ·w
+    port_vol = float(np.sqrt(port_var))
+
+    mcr = sigma_w / port_vol if port_vol > 0 else sigma_w * 0   # marginal
+    rc  = w_arr * mcr                                            # component
+    pct_rc = rc / port_vol if port_vol > 0 else rc * 0          # pct of vol
+
+    result = pd.DataFrame({
+        "weight": w.values,
+        "MCR":    mcr,
+        "RC":     rc,
+        "pct_RC": pct_rc,
+    }, index=tickers)
+
+    return result, port_vol
+
+
+def rolling_risk_contrib(returns_df, weights_s, window=90):
+    """
+    Rolling component contribution to volatility.
+
+    Returns
+    -------
+    pct_RC_df  : DataFrame (dates × tickers) of rolling percent risk contributions
+    port_vol_s : Series    of rolling portfolio volatility
+    """
+    tickers = [t for t in returns_df.columns if t in weights_s.index]
+    returns_df = returns_df[tickers].dropna(how="all")
+    w = weights_s.reindex(tickers).fillna(0)
+    if w.sum() > 0:
+        w = w / w.sum()
+    w_arr = w.values
+
+    dates = returns_df.index[window - 1:]
+    pct_rc_rows = []
+    vol_rows = []
+
+    for i in range(window, len(returns_df) + 1):
+        chunk = returns_df.iloc[i - window:i]
+        cov = chunk.cov().values
+        sigma_w = cov @ w_arr
+        port_var = float(w_arr @ sigma_w)
+        port_vol = float(np.sqrt(max(port_var, 0)))
+
+        if port_vol > 0:
+            mcr = sigma_w / port_vol
+            rc = w_arr * mcr
+            pct = rc / port_vol
+        else:
+            pct = np.zeros(len(tickers))
+
+        pct_rc_rows.append(pct)
+        vol_rows.append(port_vol)
+
+    pct_RC_df = pd.DataFrame(pct_rc_rows, index=dates, columns=tickers)
+    port_vol_s = pd.Series(vol_rows, index=dates, name="port_vol")
+
+    return pct_RC_df, port_vol_s
 
 
 # ─────────────────────────────────────────────────────────────────────────────

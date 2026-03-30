@@ -1,10 +1,17 @@
-"""Callback — Correlation matrix heatmap + table."""
+"""Callback — Correlation matrix heatmap + table + rolling correlation chart."""
 
+import pandas as pd
+import yfinance as yf
 import plotly.graph_objects as go
 from dash import dcc, html, Input, Output, State
 
 from theme import FONT, get_theme
 from data import parse_tickers, build_correlation_data
+
+_ROLL_COLOURS = [
+    "#ff8c00", "#4296f5", "#00d26a", "#ff3333", "#a855f7",
+    "#e91e8f", "#06b6d4", "#eab308", "#6366f1", "#14b8a6",
+]
 
 
 def register_callbacks(app):
@@ -101,3 +108,103 @@ def register_callbacks(app):
         status = f"Computed {freq_label} return correlations for {len(available)} ticker(s): {used}"
 
         return dcc.Graph(figure=fig, config={"displayModeBar": False}), table, status
+
+    # ── Rolling correlation chart ─────────────────────────────────────────
+    @app.callback(
+        Output("rolling-corr-chart",  "children"),
+        Output("rolling-corr-status", "children"),
+        Input("rolling-corr-run", "n_clicks"),
+        State("rolling-corr-base",    "value"),
+        State("rolling-corr-others",  "value"),
+        State("rolling-corr-window",  "value"),
+        State("rolling-corr-history", "value"),
+        State("theme-store",          "data"),
+        prevent_initial_call=True,
+    )
+    def rolling_correlation(n, base_raw, others_raw, window, history, theme_mode):
+        c = get_theme(theme_mode or "dark")
+
+        base_tickers = parse_tickers(base_raw)
+        other_tickers = parse_tickers(others_raw)
+
+        if not base_tickers or not other_tickers:
+            return html.Div(), "Enter a base ticker (A) and at least one comparison ticker (B)."
+
+        base = base_tickers[0]           # single base ticker
+        all_tickers = [base] + [t for t in other_tickers if t != base]
+
+        # Download daily close prices (rolling always on daily returns)
+        try:
+            raw = yf.download(
+                tickers=all_tickers,
+                period=history or "3y",
+                interval="1d",
+                auto_adjust=True,
+                progress=False,
+            )
+        except Exception as exc:
+            return html.Div(), f"Download error: {exc}"
+
+        if raw is None or raw.empty:
+            return html.Div(), "No data returned — check tickers."
+
+        if isinstance(raw.columns, pd.MultiIndex):
+            price_df = raw.get("Close")
+        else:
+            price_df = raw
+
+        if isinstance(price_df, pd.Series):
+            price_df = price_df.to_frame(name=all_tickers[0])
+
+        available = [t for t in all_tickers if t in price_df.columns]
+        if base not in available:
+            return html.Div(), f"No data found for base ticker {base}."
+
+        others_available = [t for t in other_tickers if t in available and t != base]
+        if not others_available:
+            return html.Div(), "No data for comparison tickers."
+
+        returns = price_df[available].pct_change().dropna(how="all")
+        window = int(window) if window else 63
+
+        fig = go.Figure()
+        for i, other in enumerate(others_available):
+            roll = returns[base].rolling(window).corr(returns[other]).dropna()
+            colour = _ROLL_COLOURS[i % len(_ROLL_COLOURS)]
+            fig.add_trace(go.Scatter(
+                x=roll.index, y=roll.values,
+                mode="lines",
+                name=f"{base} vs {other}",
+                line={"color": colour, "width": 1.8},
+                hovertemplate=f"{base} vs {other}: " + "%{y:.3f}<extra></extra>",
+            ))
+
+        # Reference lines
+        for lvl, dash_style in [(0, "solid"), (0.5, "dot"), (-0.5, "dot")]:
+            fig.add_hline(y=lvl, line_dash=dash_style,
+                          line_color=c["muted"], line_width=0.8,
+                          annotation_text=str(lvl) if lvl != 0 else None,
+                          annotation_font_size=9, annotation_font_color=c["muted"])
+
+        window_labels = {5: "1W", 10: "2W", 21: "1M", 63: "3M", 126: "6M", 252: "1Y"}
+        win_label = window_labels.get(window, f"{window}d")
+
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font={"family": FONT, "color": c["text"], "size": 11},
+            margin={"l": 45, "r": 15, "t": 30, "b": 40},
+            height=380,
+            yaxis={"title": "Correlation", "range": [-1.05, 1.05],
+                   "gridcolor": c["border"], "zerolinecolor": c["muted"]},
+            xaxis={"gridcolor": c["border"]},
+            legend={"orientation": "h", "y": -0.15, "x": 0.5, "xanchor": "center",
+                    "font": {"size": 10}},
+            title={"text": f"Rolling {win_label} Correlation (Daily Returns)",
+                   "font": {"size": 13}, "x": 0.5},
+        )
+
+        pairs_str = ", ".join(f"{base} vs {t}" for t in others_available)
+        status = f"{win_label} rolling window  •  {pairs_str}"
+
+        return dcc.Graph(figure=fig, config={"displayModeBar": False}), status

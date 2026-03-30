@@ -12,16 +12,16 @@ run at import time still work.
 # Colour palettes
 # ─────────────────────────────────────────────────────────────────────────────
 DARK = {
-    "bg":      "#005ae0",
-    "panel":   "#2b83ff",
-    "border":  "#21262d",
-    "accent":  "#f0b429",
-    "green":   "#3fb950",
-    "red":     "#f85149",
-    "blue":    "#58a6ff",
-    "muted":   "#484f58",
-    "text":    "#e6edf3",
-    "subtext": "#8b949e",
+    "bg":      "#000000",
+    "panel":   "#1a1a1a",
+    "border":  "#333333",
+    "accent":  "#ff8c00",
+    "green":   "#00d26a",
+    "red":     "#ff3333",
+    "blue":    "#4296f5",
+    "muted":   "#555555",
+    "text":    "#f5f5f5",
+    "subtext": "#999999",
 }
 
 LIGHT = {
