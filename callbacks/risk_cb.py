@@ -7,6 +7,7 @@ from dash import dcc, html, Input, Output, State, no_update
 
 from theme import FONT, get_theme
 from data import parse_tickers, risk_contrib, rolling_risk_contrib
+from portfolio import load_transactions, compute_holdings, _resolve_ticker
 
 _COLOURS = [
     "#ff8c00", "#4296f5", "#00d26a", "#ff3333", "#a855f7",
@@ -54,6 +55,35 @@ def _download_returns(tickers, period="3y"):
 
 
 def register_callbacks(app):
+
+    # ── Load tickers + weights from Portfolio blotter ──────────────────
+    @app.callback(
+        Output("risk-tickers", "value"),
+        Output("risk-weights", "value"),
+        Output("risk-load-port-status", "children"),
+        Input("risk-load-port", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def load_portfolio_into_risk(n):
+        try:
+            txns = load_transactions()
+            if txns.empty:
+                return no_update, no_update, "No transactions found."
+            hdf, _ = compute_holdings(txns)
+            active = hdf[hdf["shares"] > 0].copy()
+            if active.empty:
+                return no_update, no_update, "No active holdings."
+            # Resolve to Yahoo tickers for downstream yfinance calls
+            yf_tickers = []
+            for t in active["ticker"]:
+                yf_t, _ = _resolve_ticker(t)
+                yf_tickers.append(yf_t)
+            tickers_str = ", ".join(yf_tickers)
+            weights_str = ", ".join(f"{w / 100:.4f}" for w in active["weight_pct"])
+            n_stocks = len(yf_tickers)
+            return tickers_str, weights_str, f"Loaded {n_stocks} holdings."
+        except Exception as exc:
+            return no_update, no_update, f"Error: {exc}"
 
     @app.callback(
         Output("risk-snapshot-table", "children"),

@@ -49,6 +49,20 @@ def build_risk_section(LBL, PANEL, C, FONT):
             ], style={"display": "flex", "gap": "0.75rem", "marginBottom": "0.6rem"}),
 
             html.Div([
+                html.Button("\U0001F4C2 Load from Portfolio", id="risk-load-port", n_clicks=0,
+                            style={"backgroundColor": C["accent"], "color": "#000",
+                                   "border": "none", "borderRadius": "8px",
+                                   "padding": "0.45rem 1.2rem", "fontFamily": FONT,
+                                   "fontWeight": "700", "fontSize": "0.78rem",
+                                   "cursor": "pointer"}),
+                html.Span(id="risk-load-port-status",
+                          style={"color": C["muted"], "fontSize": "0.72rem",
+                                 "fontFamily": FONT, "alignSelf": "center"},
+                          className="theme-muted"),
+            ], style={"display": "flex", "gap": "0.75rem", "alignItems": "center",
+                      "marginBottom": "0.6rem"}),
+
+            html.Div([
                 html.Div([
                     html.Div("Benchmark (optional)", style={**LBL, "marginBottom": "0.3rem"},
                              className="theme-label"),

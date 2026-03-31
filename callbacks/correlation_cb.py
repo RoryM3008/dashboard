@@ -3,10 +3,11 @@
 import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
-from dash import dcc, html, Input, Output, State
+from dash import dcc, html, Input, Output, State, no_update
 
 from theme import FONT, get_theme
 from data import parse_tickers, build_correlation_data
+from portfolio import load_transactions, compute_holdings, _resolve_ticker
 
 _ROLL_COLOURS = [
     "#ff8c00", "#4296f5", "#00d26a", "#ff3333", "#a855f7",
@@ -15,6 +16,31 @@ _ROLL_COLOURS = [
 
 
 def register_callbacks(app):
+
+    # ── Load tickers from Portfolio blotter ─────────────────────────────
+    @app.callback(
+        Output("corr-tickers", "value"),
+        Output("corr-load-port-status", "children"),
+        Input("corr-load-port", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def load_portfolio_into_corr(n):
+        try:
+            txns = load_transactions()
+            if txns.empty:
+                return no_update, "No transactions found."
+            hdf, _ = compute_holdings(txns)
+            active = hdf[hdf["shares"] > 0].copy()
+            if active.empty:
+                return no_update, "No active holdings."
+            yf_tickers = []
+            for t in active["ticker"]:
+                yf_t, _ = _resolve_ticker(t)
+                yf_tickers.append(yf_t)
+            tickers_str = ", ".join(yf_tickers)
+            return tickers_str, f"Loaded {len(yf_tickers)} holdings."
+        except Exception as exc:
+            return no_update, f"Error: {exc}"
 
     @app.callback(
         Output("corr-heatmap", "children"),
