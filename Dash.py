@@ -33,8 +33,6 @@ from pages.correlation_page import build_correlation_section
 from pages.performance_page import build_performance_section
 from pages.watchlist_page import build_watchlist_section
 from pages.markets_page import build_markets_section
-from pages.prices_page import build_prices_section
-from pages.risk_page import build_risk_section
 from pages.port_page import build_port_section
 
 # -- Callback modules (each has register_callbacks(app)) ----------------------
@@ -47,8 +45,6 @@ from callbacks import (
     performance_cb,
     watchlist_cb,
     markets_cb,
-    prices_cb,
-    risk_cb,
     port_cb,
 )
 
@@ -83,7 +79,7 @@ app.layout = html.Div(id="root-container", style={
     html.Div([
         html.Div("\U0001F4C8", style={"fontSize": "1.9rem"}),
         html.Div([
-            html.H1("Dashboard", id="title-text",
+            html.H1("Stock Dashboard", id="title-text",
                      style={"margin": 0, "fontFamily": FONT, "fontWeight": "800",
                             "fontSize": "1.7rem", "color": C["text"]}),
             html.Div("Live market \u00b7 Earnings \u00b7 News \u00b7 Stock Analyser",
@@ -137,9 +133,9 @@ app.layout = html.Div(id="root-container", style={
             html.Button("Performance",    id="menu-performance",  n_clicks=0, style=MAIN_MENU_BTN),
             html.Button("Watchlist",      id="menu-watchlist",    n_clicks=0, style=MAIN_MENU_BTN),
             html.Button("Markets",        id="menu-markets",      n_clicks=0, style=MAIN_MENU_BTN),
-            html.Button("Prices",         id="menu-prices",       n_clicks=0, style=MAIN_MENU_BTN),
-            html.Button("Risk",           id="menu-risk",         n_clicks=0, style=MAIN_MENU_BTN),
             html.Button("Portfolio",      id="menu-port",         n_clicks=0, style=MAIN_MENU_BTN),
+            html.Button("", id="menu-prices", n_clicks=0, style={"display": "none"}),
+            html.Button("", id="menu-risk",   n_clicks=0, style={"display": "none"}),
             dcc.Store(id="active-main-menu", data="dashboard"),
         ], id="sidebar-panel", className="theme-panel", style={**PANEL, "width": "220px", "padding": "0.9rem", "display": "flex",
                   "flexDirection": "column", "gap": "0.45rem", "position": "sticky", "top": "1rem"}),
@@ -154,9 +150,9 @@ app.layout = html.Div(id="root-container", style={
             build_performance_section(LBL, PANEL, C, FONT),
             build_watchlist_section(LBL, PANEL, C, FONT),
             build_markets_section(LBL, PANEL, C, FONT),
-            build_prices_section(LBL, PANEL, C, FONT),
-            build_risk_section(LBL, PANEL, C, FONT),
             build_port_section(LBL, PANEL, C, FONT),
+            html.Div(id="section-prices", style={"display": "none"}),
+            html.Div(id="section-risk",   style={"display": "none"}),
         ], style={"flex": "1", "minWidth": "280px"}),
     ], style={"display": "flex", "gap": "1rem", "alignItems": "flex-start", "flexWrap": "wrap"}),
 
@@ -174,8 +170,6 @@ correlation_cb.register_callbacks(app)
 performance_cb.register_callbacks(app)
 watchlist_cb.register_callbacks(app)
 markets_cb.register_callbacks(app)
-prices_cb.register_callbacks(app)
-risk_cb.register_callbacks(app)
 port_cb.register_callbacks(app)
 
 # ── Theme toggle callback ────────────────────────────────────────────────────

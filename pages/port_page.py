@@ -217,6 +217,29 @@ def build_port_section(LBL, PANEL, C, FONT):
             html.Div(id="port-holdings-table", style={"overflowX": "auto"}),
         ], style=PANEL, className="theme-panel"),
 
+        # ── Cash Reconciliation ───────────────────────────────────────────
+        html.Div([
+            html.Div("Cash Reconciliation", style={**LBL, "color": C["accent"],
+                     "fontSize": "0.72rem"}, className="theme-label-accent"),
+            html.Div(id="port-recon-table", style={"overflowX": "auto",
+                      "marginBottom": "0.8rem"}),
+            # Current cash input + starting cash
+            html.Div([
+                html.Div("Current Cash (broker):", style={"color": C["subtext"],
+                         "fontSize": "0.75rem", "fontFamily": FONT,
+                         "marginRight": "0.4rem", "whiteSpace": "nowrap"}),
+                dcc.Input(id="port-current-cash", type="number",
+                          placeholder="e.g. 1234.56",
+                          style={"width": "140px", "fontSize": "0.8rem",
+                                 "fontFamily": FONT, "backgroundColor": C["bg"],
+                                 "color": C["text"], "border": f"1px solid {C['border']}",
+                                 "borderRadius": "6px", "padding": "0.3rem 0.5rem"}),
+                html.Div(id="port-starting-cash", style={"color": C["accent"],
+                         "fontSize": "0.82rem", "fontFamily": FONT,
+                         "fontWeight": "700", "marginLeft": "1rem"}),
+            ], style={"display": "flex", "alignItems": "center", "marginTop": "0.4rem"}),
+        ], style=PANEL, className="theme-panel"),
+
         # ── Performance chart ─────────────────────────────────────────────
         html.Div([
             html.Div("Portfolio Performance", style={**LBL, "marginBottom": "0.4rem"},
@@ -226,12 +249,37 @@ def build_port_section(LBL, PANEL, C, FONT):
                              options=[
                                  {"label": "Portfolio Value",    "value": "value"},
                                  {"label": "Cumulative Return",  "value": "return"},
+                                 {"label": "Indexed (100)",      "value": "indexed"},
                                  {"label": "Drawdown",           "value": "drawdown"},
                              ],
                              value="value", clearable=False,
                              style={"width": "220px", "fontSize": "0.82rem"}),
-            ], style={"marginBottom": "0.6rem"}),
+                dcc.DatePickerSingle(
+                    id="port-index-date",
+                    placeholder="Start date",
+                    display_format="DD-MM-YYYY",
+                    style={"marginLeft": "0.6rem"},
+                ),
+                dcc.Input(id="port-benchmark", type="text",
+                          placeholder="Benchmark e.g. SPY, ^FTSE",
+                          debounce=True,
+                          className="theme-input",
+                          style={"marginLeft": "0.6rem", "width": "180px",
+                                 "fontSize": "0.8rem", "fontFamily": FONT,
+                                 "backgroundColor": C["bg"], "color": C["text"],
+                                 "border": f"1px solid {C['border']}",
+                                 "borderRadius": "6px", "padding": "0.3rem 0.5rem"}),
+            ], style={"display": "flex", "alignItems": "center", "marginBottom": "0.6rem"}),
             html.Div(id="port-chart"),
+            html.Div([
+                html.Button("Export Daily Breakdown", id="port-debug-export", n_clicks=0, style={
+                    "backgroundColor": "transparent", "color": C["blue"],
+                    "border": f"1px solid {C['blue']}",
+                    "borderRadius": "8px", "padding": "0.35rem 0.9rem",
+                    "fontFamily": FONT, "fontWeight": "600", "fontSize": "0.75rem",
+                    "cursor": "pointer", "marginTop": "0.5rem"}),
+            ]),
+            dcc.Download(id="port-debug-download"),
         ], style=PANEL, className="theme-panel"),
 
         # Hidden store to trigger refreshes

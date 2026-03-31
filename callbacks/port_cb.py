@@ -7,6 +7,7 @@ from datetime import date
 import dash
 import pandas as pd
 import plotly.graph_objects as go
+import yfinance as yf
 from dash import dcc, html, Input, Output, State, ALL, no_update
 
 from theme import FONT, get_theme
@@ -57,11 +58,12 @@ def _render_ledger(txns_df, c):
         "whiteSpace": "nowrap",
     }
 
-    cols = ["date", "ticker", "side", "quantity", "price", "fx_rate", "fees", "notes"]
+    cols = ["date", "ticker", "side", "quantity", "price", "fx_rate", "fees", "total_gbp", "notes"]
+    nice = {"fx_rate": "FX", "total_gbp": "TOTAL £"}
     header = html.Thead(html.Tr(
         [html.Th("", style={**th_s, "width": "55px"})] +
-        [html.Th(col.upper().replace("FX_RATE", "FX"), style={**th_s,
-                 "textAlign": "right" if col in ("quantity", "price", "fx_rate", "fees") else "left"})
+        [html.Th(nice.get(col, col.upper()), style={**th_s,
+                 "textAlign": "right" if col in ("quantity", "price", "fx_rate", "fees", "total_gbp") else "left"})
          for col in cols]
     ))
 
@@ -125,11 +127,70 @@ def _render_ledger(txns_df, c):
             html.Td(price_text, style={**td_s, "textAlign": "right"}),
             html.Td(fx_text, style={**td_s, "textAlign": "right", "color": c["subtext"]}),
             html.Td(f"£{float(tx['fees']):,.2f}", style={**td_s, "textAlign": "right"}),
+            html.Td(f"£{float(tx['total_gbp']):,.2f}" if pd.notna(tx.get("total_gbp")) and tx.get("total_gbp") else "—",
+                    style={**td_s, "textAlign": "right", "color": c["accent"], "fontWeight": "600"}),
             html.Td(tx.get("notes", ""), style={**td_s, "color": c["subtext"]}),
         ]))
 
     return html.Table([header, html.Tbody(rows)],
                       style={"width": "100%", "borderCollapse": "collapse"})
+
+
+_CCY_SYMBOLS = {"USD": "$", "GBP": "£", "GBp": "", "GBX": "", "EUR": "€"}
+
+
+def _fmt_local(price, ccy):
+    """Format a price in its local currency."""
+    if price is None:
+        return "—"
+    sym = _CCY_SYMBOLS.get(ccy, "")
+    if ccy in ("GBp", "GBX"):
+        return f"{price:,.2f}p"
+    return f"{sym}{price:,.2f}"
+
+
+def _fetch_benchmark_prices(ticker, start, end):
+    """Download daily close for a benchmark ticker, return as Series indexed by date."""
+    try:
+        raw = yf.download(ticker, start=start, end=end + pd.Timedelta(days=1),
+                          interval="1d", auto_adjust=True, progress=False)
+        if raw is not None and not raw.empty:
+            if isinstance(raw.columns, pd.MultiIndex):
+                s = raw["Close"].iloc[:, 0]
+            else:
+                s = raw["Close"] if "Close" in raw.columns else raw.iloc[:, 0]
+            return s.dropna()
+    except Exception:
+        pass
+    return pd.Series(dtype=float)
+
+
+def _add_benchmark(fig, ticker, start_date, end_date, c):
+    """Add an indexed-at-100 benchmark trace to the figure."""
+    prices = _fetch_benchmark_prices(ticker, start_date, end_date)
+    if prices.empty:
+        return
+    indexed = 100 * prices / prices.iloc[0]
+    fig.add_trace(go.Scatter(
+        x=indexed.index, y=indexed.values,
+        mode="lines", name=ticker.upper(),
+        line={"color": c["blue"], "width": 1.5, "dash": "dot"},
+        hovertemplate=f"{ticker.upper()}: " + "%{y:.2f}<extra></extra>",
+    ))
+
+
+def _add_benchmark_return(fig, ticker, start_date, end_date, c):
+    """Add a cumulative-return % benchmark trace to the figure."""
+    prices = _fetch_benchmark_prices(ticker, start_date, end_date)
+    if prices.empty:
+        return
+    cum_ret = (prices / prices.iloc[0] - 1) * 100
+    fig.add_trace(go.Scatter(
+        x=cum_ret.index, y=cum_ret.values,
+        mode="lines", name=ticker.upper(),
+        line={"color": c["blue"], "width": 1.5, "dash": "dot"},
+        hovertemplate=f"{ticker.upper()}: " + "%{y:.2f}%<extra></extra>",
+    ))
 
 
 def _render_holdings(hdf, summary, c):
@@ -177,7 +238,8 @@ def _render_holdings(hdf, summary, c):
             html.Td(h["ticker"], style={**td_s, "color": c["accent"], "fontWeight": "700"}),
             html.Td(f"{h['shares']:,.2f}", style={**td_s, "textAlign": "right"}),
             html.Td(f"£{h['avg_cost']:,.2f}", style={**td_s, "textAlign": "right"}),
-            html.Td(_f(h["last_price"]), style={**td_s, "textAlign": "right"}),
+            html.Td(_fmt_local(h.get("last_price_local"), h.get("currency", "")),
+                    style={**td_s, "textAlign": "right"}),
             html.Td(_f(h["market_value"]), style={**td_s, "textAlign": "right"}),
             html.Td(_f(u_pnl), style={**td_s, "textAlign": "right", "color": u_col,
                                        "fontWeight": "600"}),
@@ -475,18 +537,36 @@ def register_callbacks(app):
         csv_str = export_csv()
         return dcc.send_string(csv_str, "portfolio_transactions.csv")
 
-    # ── 5) Master render: ledger + holdings + overview + chart ────────────
+    # ── 4b) Export daily breakdown CSV ─────────────────────────────────
+    @app.callback(
+        Output("port-debug-download", "data"),
+        Input("port-debug-export", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def debug_export(n):
+        txns = load_transactions()
+        if txns.empty:
+            return no_update
+        _, debug_df = compute_portfolio_ts(txns, return_debug=True)
+        if debug_df.empty:
+            return no_update
+        return dcc.send_data_frame(debug_df.to_csv, "portfolio_daily_breakdown.csv", index=False)
+
+    # ── 5) Master render: ledger + holdings + overview + chart + recon ────
     @app.callback(
         Output("port-ledger-table",   "children"),
         Output("port-holdings-table", "children"),
         Output("port-overview",       "children"),
         Output("port-chart",          "children"),
+        Output("port-recon-table",    "children"),
         Input("port-refresh-trigger", "data"),
         Input("port-refresh",         "n_clicks"),
         Input("port-chart-mode",      "value"),
+        Input("port-index-date",      "date"),
+        Input("port-benchmark",       "value"),
         State("theme-store",          "data"),
     )
-    def render_all(trigger, n_refresh, chart_mode, theme_mode):
+    def render_all(trigger, n_refresh, chart_mode, index_date, benchmark_ticker, theme_mode):
         c = get_theme(theme_mode or "dark")
 
         txns = load_transactions()
@@ -504,7 +584,7 @@ def register_callbacks(app):
                 _metric_card("Total P&L", "£0.00", c["text"], c),
                 _metric_card("Cash", "£0.00", c["text"], c),
             ]
-            return ledger_html, empty, overview, html.Div()
+            return ledger_html, empty, overview, html.Div(), html.Div()
 
         # Holdings
         hdf, summary = compute_holdings(txns)
@@ -564,6 +644,42 @@ def register_callbacks(app):
                 ))
                 fig.add_hline(y=0, line_dash="solid", line_color=c["muted"], line_width=0.8)
                 y_title = "Cumulative Return (%)"
+
+                # Overlay benchmark if provided
+                if benchmark_ticker and benchmark_ticker.strip():
+                    _add_benchmark_return(fig, benchmark_ticker.strip(), ts.index[0], ts.index[-1], c)
+
+            elif chart_mode == "indexed":
+                # Rebase TWR to 100 from chosen date (or first date)
+                if "twr" in ts.columns:
+                    twr_series = ts["twr"]
+                    if index_date:
+                        start_dt = pd.Timestamp(index_date).normalize()
+                        # Find nearest date >= chosen date
+                        mask = twr_series.index >= start_dt
+                        if mask.any():
+                            base_val = twr_series.loc[mask].iloc[0]
+                            twr_series = twr_series.loc[mask]
+                        else:
+                            base_val = twr_series.iloc[0]
+                    else:
+                        base_val = twr_series.iloc[0]
+                    indexed = 100 * twr_series / base_val
+                    last_val = indexed.iloc[-1]
+                    colour = c["green"] if last_val >= 100 else c["red"]
+                    fig.add_trace(go.Scatter(
+                        x=indexed.index, y=indexed.values,
+                        mode="lines", name="Indexed (100)",
+                        line={"color": colour, "width": 2},
+                        hovertemplate="%{y:.2f}<extra></extra>",
+                    ))
+                    fig.add_hline(y=100, line_dash="solid", line_color=c["muted"], line_width=0.8)
+                y_title = "Indexed Return (100)"
+
+                # Overlay benchmark if provided
+                if benchmark_ticker and benchmark_ticker.strip():
+                    _add_benchmark(fig, benchmark_ticker.strip(), indexed.index[0], indexed.index[-1], c)
+
             else:  # drawdown
                 fig.add_trace(go.Scatter(
                     x=ts.index, y=ts["drawdown"],
@@ -575,6 +691,7 @@ def register_callbacks(app):
                 ))
                 y_title = "Drawdown (%)"
 
+            has_benchmark = benchmark_ticker and benchmark_ticker.strip() and chart_mode in ("indexed", "return")
             fig.update_layout(
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
@@ -584,8 +701,91 @@ def register_callbacks(app):
                 yaxis={"title": y_title, "gridcolor": c["border"],
                        "zerolinecolor": c["muted"]},
                 xaxis={"gridcolor": c["border"]},
-                showlegend=False,
+                showlegend=has_benchmark,
+                legend={"font": {"size": 10}, "orientation": "h",
+                        "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0},
             )
             chart_html = dcc.Graph(figure=fig, config={"displayModeBar": False})
 
-        return ledger_html, holdings_html, overview, chart_html
+        # ── Cash reconciliation table ──────────────────────────────────
+        recon_th = {"padding": "0.3rem 0.6rem", "fontSize": "0.65rem",
+                    "fontWeight": "700", "textTransform": "uppercase",
+                    "letterSpacing": "0.05em", "color": c["muted"],
+                    "borderBottom": f"2px solid {c['border']}", "fontFamily": FONT}
+        recon_td = {"padding": "0.3rem 0.6rem", "fontSize": "0.78rem",
+                    "fontFamily": FONT, "color": c["text"],
+                    "borderBottom": f"1px solid {c['border']}"}
+        recon_items = [
+            ("Total Deposits",       summary["total_deposited"]),
+            ("Total Withdrawals",   -summary["total_withdrawn"]),
+            ("Total Buy Cost",      -summary["total_buy_cost"]),
+            ("Total Sell Proceeds",  summary["total_sell_proceeds"]),
+            ("Total Fees",          -summary["total_fees"]),
+            ("Total Dividends",      summary.get("total_dividends", 0)),
+            ("Total Interest",       summary.get("total_interest", 0)),
+        ]
+        recon_rows = []
+        for lbl, val in recon_items:
+            val_col = c["green"] if val >= 0 else c["red"]
+            recon_rows.append(html.Tr([
+                html.Td(lbl, style={**recon_td, "fontWeight": "600"}),
+                html.Td(f"£{val:,.2f}", style={**recon_td, "textAlign": "right", "color": val_col}),
+            ]))
+        # Calculated cash row
+        calc_cash = summary["cash_calculated"]
+        calc_col = c["green"] if calc_cash >= 0 else c["red"]
+        recon_rows.append(html.Tr([
+            html.Td("= Calculated Cash", style={**recon_td, "fontWeight": "700",
+                    "borderTop": f"2px solid {c['accent']}"}),
+            html.Td(f"£{calc_cash:,.2f}", style={**recon_td, "textAlign": "right",
+                    "fontWeight": "700", "color": calc_col,
+                    "borderTop": f"2px solid {c['accent']}"}),
+        ]))
+        # If broker cash override is set, show gap
+        if summary.get("cash_overridden"):
+            broker_cash = summary["cash"]
+            gap = broker_cash - calc_cash
+            gap_col = c["green"] if abs(gap) < 0.01 else c["red"]
+            recon_rows.append(html.Tr([
+                html.Td("Broker Cash (override)", style={**recon_td, "fontWeight": "600"}),
+                html.Td(f"£{broker_cash:,.2f}", style={**recon_td, "textAlign": "right",
+                        "color": c["accent"], "fontWeight": "600"}),
+            ]))
+            recon_rows.append(html.Tr([
+                html.Td("Gap", style={**recon_td, "fontWeight": "700"}),
+                html.Td(f"£{gap:,.2f}", style={**recon_td, "textAlign": "right",
+                        "fontWeight": "700", "color": gap_col}),
+            ]))
+
+        recon_html = html.Table(
+            [html.Thead(html.Tr([
+                html.Th("Item", style=recon_th),
+                html.Th("Amount", style={**recon_th, "textAlign": "right"}),
+            ])), html.Tbody(recon_rows)],
+            style={"width": "auto", "maxWidth": "360px", "borderCollapse": "collapse"},
+        )
+
+        return ledger_html, holdings_html, overview, chart_html, recon_html
+
+    # ── 6) Starting cash calculation ──────────────────────────────────────────
+    @app.callback(
+        Output("port-starting-cash", "children"),
+        Input("port-current-cash",   "value"),
+        Input("port-refresh-trigger", "data"),
+        Input("port-refresh",         "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def calc_starting_cash(current_cash, trigger, n_refresh):
+        if not current_cash:
+            return ""
+        try:
+            current_val = float(current_cash)
+        except (ValueError, TypeError):
+            return "Enter a valid number"
+        txns = load_transactions()
+        if txns.empty:
+            return f"Starting Cash: £{current_val:,.2f}"
+        _, summary = compute_holdings(txns)
+        calc = summary.get("cash_calculated", 0)
+        starting = current_val - calc
+        return f"Starting Cash: £{starting:,.2f}"
