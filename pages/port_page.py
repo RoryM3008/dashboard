@@ -214,6 +214,28 @@ def build_port_section(LBL, PANEL, C, FONT):
             ], style={"display": "flex", "gap": "0.5rem", "alignItems": "center",
                       "marginBottom": "0.6rem"}),
 
+            html.Div([
+                html.Div("Sort by:", style={"color": C["subtext"], "fontSize": "0.65rem",
+                         "fontFamily": FONT, "marginRight": "0.3rem",
+                         "whiteSpace": "nowrap", "alignSelf": "center"}),
+                dcc.Dropdown(id="port-holdings-sort",
+                             options=[
+                                 {"label": "Weight ↓",      "value": "weight_pct_desc"},
+                                 {"label": "Weight ↑",      "value": "weight_pct_asc"},
+                                 {"label": "Mkt Value ↓",   "value": "market_value_desc"},
+                                 {"label": "Mkt Value ↑",   "value": "market_value_asc"},
+                                 {"label": "Total P&L ↓",   "value": "total_pnl_desc"},
+                                 {"label": "Total P&L ↑",   "value": "total_pnl_asc"},
+                                 {"label": "Unreal % ↓",    "value": "unrealized_pnl_pct_desc"},
+                                 {"label": "Unreal % ↑",    "value": "unrealized_pnl_pct_asc"},
+                                 {"label": "Ticker A→Z",    "value": "ticker_asc"},
+                                 {"label": "Ticker Z→A",    "value": "ticker_desc"},
+                             ],
+                             value="weight_pct_desc", clearable=False,
+                             style={"width": "160px", "fontSize": "0.75rem"}),
+            ], style={"display": "flex", "alignItems": "center", "gap": "0.3rem",
+                      "marginBottom": "0.5rem"}),
+            dcc.Store(id="port-holdings-data", data=[]),
             html.Div(id="port-holdings-table", style={"overflowX": "auto"}),
         ], style=PANEL, className="theme-panel"),
 

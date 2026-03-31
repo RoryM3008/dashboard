@@ -391,15 +391,40 @@ def fetch_live_fx():
 
 
 # ── Ticker resolution cache ────────────────────────────────────────────────────────
-_TICKER_SUFFIXES = ["", ".L"]   # bare first, then London
+# Explicit overrides for tickers where the bare US symbol is wrong.
+# Map: user_ticker → correct yfinance ticker
+_TICKER_OVERRIDES = {
+    "PSH":  "PSH.L",    # Pershing Square Holdings (LSE, GBp)
+    "DSY":  "DSY.PA",   # Dassault Systèmes (Euronext Paris, EUR)
+}
+
+_TICKER_SUFFIXES = ["", ".L", ".PA", ".AS", ".DE"]  # bare, London, Paris, Amsterdam, Frankfurt
 _resolved_cache = {}            # user_ticker → yf_ticker
 
 
 def _resolve_ticker(ticker):
-    """Try the bare ticker in yfinance; if it fails try with .L suffix.
+    """Resolve a user ticker to a valid yfinance ticker.
+
+    Priority order:
+    1. Explicit override (_TICKER_OVERRIDES)
+    2. Cached result from a previous call
+    3. Try suffixes in order: bare, .L, .PA, .AS, .DE
+
     Returns (yf_ticker, fast_info) or (ticker, None) on total failure.
     Caches results for the session.
     """
+    # 1. Check explicit overrides first
+    if ticker in _TICKER_OVERRIDES and ticker not in _resolved_cache:
+        candidate = _TICKER_OVERRIDES[ticker]
+        try:
+            fi = yf.Ticker(candidate).fast_info
+            _ = fi.last_price
+            _resolved_cache[ticker] = candidate
+            return candidate, fi
+        except Exception:
+            pass  # fall through to suffix search
+
+    # 2. Check cache
     if ticker in _resolved_cache:
         yf_t = _resolved_cache[ticker]
         try:
@@ -408,6 +433,8 @@ def _resolve_ticker(ticker):
             return yf_t, fi
         except Exception:
             pass
+
+    # 3. Try suffixes
     for suffix in _TICKER_SUFFIXES:
         candidate = ticker + suffix
         try:
@@ -471,8 +498,12 @@ def compute_holdings(txns_df, last_prices=None):
     # Build holdings rows
     tickers = sorted(set(t for t, l in lots.items() if l))  # only open positions
 
-    # Fetch last prices, detect currency, and get live GBPUSD rate
-    live_fx = fetch_live_fx()   # GBPUSD rate (e.g. 1.29)
+    # Fetch last prices, detect currency, and get live FX rates
+    live_fx_usd = fetch_live_fx()   # GBPUSD rate (e.g. 1.29)
+    try:
+        live_fx_eur = yf.Ticker(_FX_EUR).fast_info.last_price or 1.0
+    except Exception:
+        live_fx_eur = 1.0
     ticker_ccy = {}
 
     if last_prices is None:
@@ -508,8 +539,10 @@ def compute_holdings(txns_df, last_prices=None):
             lp_gbp = lp_raw / 100 if lp_raw else None       # pence → pounds
         elif ccy == "GBP":
             lp_gbp = lp_raw                                   # already pounds
+        elif ccy == "EUR":
+            lp_gbp = lp_raw / live_fx_eur if lp_raw else None  # EUR → GBP
         else:
-            lp_gbp = lp_raw / live_fx if lp_raw else None    # USD → GBP
+            lp_gbp = lp_raw / live_fx_usd if lp_raw else None  # USD → GBP
         mv = shares * lp_gbp if lp_gbp else None             # market value in GBP
         u_pnl = (lp_gbp - avg_cost) * shares if lp_gbp else None
         u_pct = ((lp_gbp / avg_cost) - 1) * 100 if lp_gbp and avg_cost > 0 else None

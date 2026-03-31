@@ -193,8 +193,8 @@ def _add_benchmark_return(fig, ticker, start_date, end_date, c):
     ))
 
 
-def _render_holdings(hdf, summary, c):
-    """Render the holdings summary table (active positions only)."""
+def _render_holdings(hdf, c):
+    """Render the holdings summary as an HTML table (active positions only)."""
     # Filter to active positions only
     hdf = hdf[hdf["shares"] > 0].copy() if not hdf.empty and "shares" in hdf.columns else hdf
     if hdf.empty:
@@ -231,21 +231,21 @@ def _render_holdings(hdf, summary, c):
         u_col = c["green"] if (u_pnl or 0) >= 0 else c["red"]
         t_col = c["green"] if (t_pnl or 0) >= 0 else c["red"]
 
-        def _f(v, prefix="£"):
+        def _f(v, prefix="\u00a3"):
             if v is None:
-                return "—"
+                return "\u2014"
             return f"{prefix}{v:,.2f}"
 
         rows.append(html.Tr([
             html.Td(h["ticker"], style={**td_s, "color": c["accent"], "fontWeight": "700"}),
             html.Td(f"{h['shares']:,.2f}", style={**td_s, "textAlign": "right"}),
-            html.Td(f"£{h['avg_cost']:,.2f}", style={**td_s, "textAlign": "right"}),
+            html.Td(f"\u00a3{h['avg_cost']:,.2f}", style={**td_s, "textAlign": "right"}),
             html.Td(_fmt_local(h.get("last_price_local"), h.get("currency", "")),
                     style={**td_s, "textAlign": "right"}),
             html.Td(_f(h["market_value"]), style={**td_s, "textAlign": "right"}),
             html.Td(_f(u_pnl), style={**td_s, "textAlign": "right", "color": u_col,
                                        "fontWeight": "600"}),
-            html.Td(f"{u_pct:+.1f}%" if u_pct is not None else "—",
+            html.Td(f"{u_pct:+.1f}%" if u_pct is not None else "\u2014",
                      style={**td_s, "textAlign": "right", "color": u_col}),
             html.Td(_f(h["realized_pnl"]), style={**td_s, "textAlign": "right"}),
             html.Td(_f(h.get("dividend_income", 0)), style={**td_s, "textAlign": "right",
@@ -623,7 +623,7 @@ def register_callbacks(app):
     # ── 5) Master render: ledger + holdings + overview + chart + recon ────
     @app.callback(
         Output("port-ledger-table",   "children"),
-        Output("port-holdings-table", "children"),
+        Output("port-holdings-data",  "data"),
         Output("port-overview",       "children"),
         Output("port-chart",          "children"),
         Output("port-recon-table",    "children"),
@@ -652,15 +652,13 @@ def register_callbacks(app):
                 _metric_card("Total P&L", "£0.00", c["text"], c),
                 _metric_card("Cash", "£0.00", c["text"], c),
             ]
-            return ledger_html, empty, overview, html.Div(), html.Div()
+            return ledger_html, [], overview, html.Div(), html.Div()
 
         # Holdings
         hdf, summary = compute_holdings(txns)
 
-        holdings_html = html.Div([
-            _render_holdings(hdf, summary, c),
-            _render_past_positions(hdf, c),
-        ])
+        # Serialize holdings to JSON for the sort callback to render
+        holdings_data = hdf.where(hdf.notna(), None).to_dict("records")
 
         # Overview cards
         pv = summary["portfolio_value"]
@@ -836,9 +834,43 @@ def register_callbacks(app):
             style={"width": "auto", "maxWidth": "360px", "borderCollapse": "collapse"},
         )
 
-        return ledger_html, holdings_html, overview, chart_html, recon_html
+        return ledger_html, holdings_data, overview, chart_html, recon_html
 
-    # ── 6) Starting cash calculation ──────────────────────────────────────────
+    # ── 6) Sort + render holdings (lightweight — no data re-fetch) ─────────
+    @app.callback(
+        Output("port-holdings-table", "children"),
+        Input("port-holdings-data",  "data"),
+        Input("port-holdings-sort",  "value"),
+        State("theme-store",         "data"),
+    )
+    def render_sorted_holdings(data, sort_val, theme_mode):
+        c = get_theme(theme_mode or "dark")
+        if not data:
+            return html.Div("Add transactions to see holdings.",
+                            style={"color": c["muted"], "fontSize": "0.82rem",
+                                   "fontFamily": FONT})
+        hdf = pd.DataFrame(data)
+
+        # Parse sort value → column + direction
+        sort_val = sort_val or "weight_pct_desc"
+        if sort_val.endswith("_asc"):
+            sort_col = sort_val[:-4]
+            ascending = True
+        else:
+            sort_col = sort_val[:-5]
+            ascending = False
+
+        # Sort active holdings
+        active = hdf[hdf["shares"] > 0].copy() if "shares" in hdf.columns else hdf.copy()
+        if sort_col in active.columns and not active.empty:
+            active = active.sort_values(sort_col, ascending=ascending, na_position="last")
+
+        return html.Div([
+            _render_holdings(active, c),
+            _render_past_positions(hdf, c),
+        ])
+
+    # ── 7) Starting cash calculation ──────────────────────────────────────────
     @app.callback(
         Output("port-starting-cash", "children"),
         Input("port-current-cash",   "value"),
