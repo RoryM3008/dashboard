@@ -194,7 +194,9 @@ def _add_benchmark_return(fig, ticker, start_date, end_date, c):
 
 
 def _render_holdings(hdf, summary, c):
-    """Render the holdings summary table."""
+    """Render the holdings summary table (active positions only)."""
+    # Filter to active positions only
+    hdf = hdf[hdf["shares"] > 0].copy() if not hdf.empty and "shares" in hdf.columns else hdf
     if hdf.empty:
         return html.Div("No open positions.",
                         style={"color": c["muted"], "fontSize": "0.82rem", "fontFamily": FONT})
@@ -255,6 +257,72 @@ def _render_holdings(hdf, summary, c):
 
     return html.Table([header, html.Tbody(rows)],
                       style={"width": "100%", "borderCollapse": "collapse"})
+
+
+def _render_past_positions(hdf, c):
+    """Render a compact table of fully-closed positions (shares == 0)."""
+    closed = hdf[(hdf["shares"] <= 0)].copy() if not hdf.empty and "shares" in hdf.columns else pd.DataFrame()
+    if closed.empty:
+        return html.Div()
+
+    th_s = {
+        "padding": "0.25rem 0.5rem", "fontSize": "0.58rem", "fontWeight": "700",
+        "textTransform": "uppercase", "letterSpacing": "0.05em",
+        "borderBottom": f"2px solid {c['border']}", "fontFamily": FONT,
+        "color": c["muted"], "whiteSpace": "nowrap",
+    }
+    td_s = {
+        "padding": "0.25rem 0.5rem", "fontSize": "0.72rem", "fontFamily": FONT,
+        "color": c["text"], "borderBottom": f"1px solid {c['border']}",
+        "whiteSpace": "nowrap",
+    }
+
+    header = html.Thead(html.Tr([
+        html.Th("Ticker", style={**th_s, "textAlign": "left"}),
+        html.Th("Real P&L", style={**th_s, "textAlign": "right"}),
+        html.Th("Divs", style={**th_s, "textAlign": "right"}),
+        html.Th("Total P&L", style={**th_s, "textAlign": "right"}),
+    ]))
+
+    rows = []
+    for _, h in closed.iterrows():
+        r_pnl = h.get("realized_pnl", 0) or 0
+        div_inc = h.get("dividend_income", 0) or 0
+        t_pnl = h.get("total_pnl", 0) or 0
+        t_col = c["green"] if t_pnl >= 0 else c["red"]
+        r_col = c["green"] if r_pnl >= 0 else c["red"]
+        rows.append(html.Tr([
+            html.Td(h["ticker"], style={**td_s, "color": c["subtext"], "fontWeight": "600"}),
+            html.Td(f"\u00a3{r_pnl:,.2f}", style={**td_s, "textAlign": "right", "color": r_col}),
+            html.Td(f"\u00a3{div_inc:,.2f}", style={**td_s, "textAlign": "right", "color": c["green"]}),
+            html.Td(f"\u00a3{t_pnl:,.2f}", style={**td_s, "textAlign": "right", "color": t_col,
+                                                    "fontWeight": "700"}),
+        ]))
+
+    total_r = closed["realized_pnl"].sum()
+    total_d = closed["dividend_income"].sum()
+    total_t = closed["total_pnl"].sum()
+    total_col = c["green"] if total_t >= 0 else c["red"]
+    rows.append(html.Tr([
+        html.Td("TOTAL", style={**td_s, "fontWeight": "700", "borderTop": f"2px solid {c['border']}"}),
+        html.Td(f"\u00a3{total_r:,.2f}", style={**td_s, "textAlign": "right", "fontWeight": "700",
+                "borderTop": f"2px solid {c['border']}",
+                "color": c["green"] if total_r >= 0 else c["red"]}),
+        html.Td(f"\u00a3{total_d:,.2f}", style={**td_s, "textAlign": "right", "fontWeight": "700",
+                "borderTop": f"2px solid {c['border']}", "color": c["green"]}),
+        html.Td(f"\u00a3{total_t:,.2f}", style={**td_s, "textAlign": "right", "fontWeight": "700",
+                "borderTop": f"2px solid {c['border']}", "color": total_col}),
+    ]))
+
+    return html.Details([
+        html.Summary(f"Past Positions ({len(closed)})", style={
+            "color": c["muted"], "fontSize": "0.72rem", "fontFamily": FONT,
+            "fontWeight": "700", "cursor": "pointer", "marginBottom": "0.4rem",
+            "textTransform": "uppercase", "letterSpacing": "0.05em",
+        }),
+        html.Table([header, html.Tbody(rows)],
+                   style={"width": "100%", "borderCollapse": "collapse"}),
+    ], style={"marginTop": "1.2rem"})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -589,7 +657,10 @@ def register_callbacks(app):
         # Holdings
         hdf, summary = compute_holdings(txns)
 
-        holdings_html = _render_holdings(hdf, summary, c)
+        holdings_html = html.Div([
+            _render_holdings(hdf, summary, c),
+            _render_past_positions(hdf, c),
+        ])
 
         # Overview cards
         pv = summary["portfolio_value"]
