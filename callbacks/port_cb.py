@@ -736,11 +736,22 @@ def register_callbacks(app):
         chart_html = html.Div()
         ts = compute_portfolio_ts(txns)
         if not ts.empty:
+            # Apply selected start date to all chart modes
+            ts_plot = ts
+            if index_date:
+                try:
+                    start_dt = pd.Timestamp(index_date).normalize()
+                    filtered = ts[ts.index >= start_dt]
+                    if not filtered.empty:
+                        ts_plot = filtered
+                except Exception:
+                    pass
+
             fig = go.Figure()
 
             if chart_mode == "value":
                 fig.add_trace(go.Scatter(
-                    x=ts.index, y=ts["portfolio_value"],
+                    x=ts_plot.index, y=ts_plot["portfolio_value"],
                     mode="lines", name="Portfolio Value",
                     line={"color": c["accent"], "width": 2},
                     fill="tozeroy",
@@ -749,9 +760,16 @@ def register_callbacks(app):
                 ))
                 y_title = "Portfolio Value (£)"
             elif chart_mode == "return":
-                colour = c["green"] if ts["cumulative_return"].iloc[-1] >= 0 else c["red"]
+                if "twr" in ts_plot.columns:
+                    base_twr = ts_plot["twr"].iloc[0]
+                    cum_ret_plot = (ts_plot["twr"] / base_twr - 1) * 100
+                else:
+                    base_val = ts_plot["portfolio_value"].iloc[0]
+                    cum_ret_plot = (ts_plot["portfolio_value"] / base_val - 1) * 100
+
+                colour = c["green"] if cum_ret_plot.iloc[-1] >= 0 else c["red"]
                 fig.add_trace(go.Scatter(
-                    x=ts.index, y=ts["cumulative_return"],
+                    x=ts_plot.index, y=cum_ret_plot,
                     mode="lines", name="Cumulative Return",
                     line={"color": colour, "width": 2},
                     hovertemplate="%{y:.2f}%<extra></extra>",
@@ -761,33 +779,26 @@ def register_callbacks(app):
 
                 # Overlay benchmark if provided
                 if benchmark_ticker and benchmark_ticker.strip():
-                    _add_benchmark_return(fig, benchmark_ticker.strip(), ts.index[0], ts.index[-1], c)
+                    _add_benchmark_return(fig, benchmark_ticker.strip(), ts_plot.index[0], ts_plot.index[-1], c)
 
             elif chart_mode == "indexed":
-                # Rebase TWR to 100 from chosen date (or first date)
-                if "twr" in ts.columns:
-                    twr_series = ts["twr"]
-                    if index_date:
-                        start_dt = pd.Timestamp(index_date).normalize()
-                        # Find nearest date >= chosen date
-                        mask = twr_series.index >= start_dt
-                        if mask.any():
-                            base_val = twr_series.loc[mask].iloc[0]
-                            twr_series = twr_series.loc[mask]
-                        else:
-                            base_val = twr_series.iloc[0]
-                    else:
-                        base_val = twr_series.iloc[0]
-                    indexed = 100 * twr_series / base_val
-                    last_val = indexed.iloc[-1]
-                    colour = c["green"] if last_val >= 100 else c["red"]
-                    fig.add_trace(go.Scatter(
-                        x=indexed.index, y=indexed.values,
-                        mode="lines", name="Indexed (100)",
-                        line={"color": colour, "width": 2},
-                        hovertemplate="%{y:.2f}<extra></extra>",
-                    ))
-                    fig.add_hline(y=100, line_dash="solid", line_color=c["muted"], line_width=0.8)
+                # Rebase selected range to 100
+                if "twr" in ts_plot.columns:
+                    base_val = ts_plot["twr"].iloc[0]
+                    indexed = 100 * ts_plot["twr"] / base_val
+                else:
+                    base_val = ts_plot["portfolio_value"].iloc[0]
+                    indexed = 100 * ts_plot["portfolio_value"] / base_val
+
+                last_val = indexed.iloc[-1]
+                colour = c["green"] if last_val >= 100 else c["red"]
+                fig.add_trace(go.Scatter(
+                    x=indexed.index, y=indexed.values,
+                    mode="lines", name="Indexed (100)",
+                    line={"color": colour, "width": 2},
+                    hovertemplate="%{y:.2f}<extra></extra>",
+                ))
+                fig.add_hline(y=100, line_dash="solid", line_color=c["muted"], line_width=0.8)
                 y_title = "Indexed Return (100)"
 
                 # Overlay benchmark if provided
@@ -795,8 +806,12 @@ def register_callbacks(app):
                     _add_benchmark(fig, benchmark_ticker.strip(), indexed.index[0], indexed.index[-1], c)
 
             else:  # drawdown
+                # Drawdown must be computed from the selected range so period buttons/date apply
+                pv = ts_plot["portfolio_value"]
+                running_max = pv.cummax()
+                drawdown_plot = ((pv - running_max) / running_max * 100).fillna(0)
                 fig.add_trace(go.Scatter(
-                    x=ts.index, y=ts["drawdown"],
+                    x=ts_plot.index, y=drawdown_plot,
                     mode="lines", name="Drawdown",
                     line={"color": c["red"], "width": 2},
                     fill="tozeroy",
