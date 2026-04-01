@@ -193,6 +193,21 @@ def _add_benchmark_return(fig, ticker, start_date, end_date, c):
     ))
 
 
+def _add_benchmark_drawdown(fig, ticker, start_date, end_date, c):
+    """Add a benchmark drawdown % trace to the figure."""
+    prices = _fetch_benchmark_prices(ticker, start_date, end_date)
+    if prices.empty:
+        return
+    running_max = prices.cummax()
+    dd = ((prices - running_max) / running_max * 100).fillna(0)
+    fig.add_trace(go.Scatter(
+        x=dd.index, y=dd.values,
+        mode="lines", name=f"{ticker.upper()} DD",
+        line={"color": c["blue"], "width": 1.5, "dash": "dot"},
+        hovertemplate=f"{ticker.upper()} DD: " + "%{y:.2f}%<extra></extra>",
+    ))
+
+
 def _render_holdings(hdf, c):
     """Render the holdings summary as an HTML table (active positions only)."""
     # Filter to active positions only
@@ -818,9 +833,13 @@ def register_callbacks(app):
                     fillcolor=f"rgba(255,51,51,0.1)",
                     hovertemplate="%{y:.2f}%<extra></extra>",
                 ))
+
+                # Overlay benchmark drawdown if provided
+                if benchmark_ticker and benchmark_ticker.strip():
+                    _add_benchmark_drawdown(fig, benchmark_ticker.strip(), ts_plot.index[0], ts_plot.index[-1], c)
                 y_title = "Drawdown (%)"
 
-            has_benchmark = benchmark_ticker and benchmark_ticker.strip() and chart_mode in ("indexed", "return")
+            has_benchmark = benchmark_ticker and benchmark_ticker.strip() and chart_mode in ("indexed", "return", "drawdown")
             fig.update_layout(
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
