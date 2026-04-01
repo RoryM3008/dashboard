@@ -105,7 +105,7 @@ def register_callbacks(app):
             if t in close.columns:
                 s = close[t].dropna()
                 if len(s) >= 2 and s.iloc[0] != 0:
-                    returns[t] = round((s.iloc[-1] / s.iloc[0] - 1) * 100, 2)
+                    returns[t] = (s.iloc[-1] / s.iloc[0] - 1) * 100
 
         plot_rows = []
         for _, r in df.iterrows():
@@ -137,7 +137,7 @@ def register_callbacks(app):
                 "line": {"color": c["border"], "width": 1},
                 "colorbar": {"title": "% Move", "tickformat": ".2f"},
             },
-            texttemplate="<b>%{label}</b><br>%{customdata[0]:.1f}%<br>%{customdata[1]:+.2f}%",
+            texttemplate="<b>%{label}</b><br>%{customdata[0]:.1f}%<br>%{customdata[1]:+.1f}%",
             customdata=plot_df[["weight", "ret_pct"]].values,
             hovertemplate="<b>%{label}</b><br>Weight: %{customdata[0]:.2f}%<br>Move: %{customdata[1]:+.2f}%<extra></extra>",
         ))
