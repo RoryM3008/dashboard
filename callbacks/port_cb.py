@@ -331,6 +331,51 @@ def _render_past_positions(hdf, c):
 
 def register_callbacks(app):
 
+    # ── Period buttons for performance chart ─────────────────────────────
+    from datetime import datetime, timedelta
+    import pandas as pd
+    @app.callback(
+        Output("port-index-date", "date"),
+        Output("port-period-status", "children"),
+        Input("port-period-ytd", "n_clicks"),
+        Input("port-period-mtd", "n_clicks"),
+        Input("port-period-3m", "n_clicks"),
+        Input("port-period-6m", "n_clicks"),
+        Input("port-period-1y", "n_clicks"),
+        Input("port-period-max", "n_clicks"),
+        prevent_initial_call=True,
+    )
+    def set_period(ytd, mtd, m3, m6, y1, max_, ):
+        ctx = dash.callback_context
+        if not ctx.triggered:
+            return no_update, ""
+        btn = ctx.triggered[0]["prop_id"].split(".")[0]
+        today = pd.Timestamp.today().normalize()
+        if btn == "port-period-ytd":
+            start = pd.Timestamp(year=today.year, month=1, day=1)
+            label = f"YTD from {start.strftime('%d-%b-%Y')}"
+        elif btn == "port-period-mtd":
+            start = pd.Timestamp(year=today.year, month=today.month, day=1)
+            label = f"MTD from {start.strftime('%d-%b-%Y')}"
+        elif btn == "port-period-3m":
+            start = today - pd.DateOffset(months=3)
+            label = f"3M from {start.strftime('%d-%b-%Y')}"
+        elif btn == "port-period-6m":
+            start = today - pd.DateOffset(months=6)
+            label = f"6M from {start.strftime('%d-%b-%Y')}"
+        elif btn == "port-period-1y":
+            start = today - pd.DateOffset(years=1)
+            label = f"1Y from {start.strftime('%d-%b-%Y')}"
+        elif btn == "port-period-max":
+            start = None
+            label = "Max: all data"
+        else:
+            return no_update, ""
+        if start is not None:
+            return start.date().isoformat(), label
+        else:
+            return None, label
+
     # ── 1) Add transaction ────────────────────────────────────────────────
     @app.callback(
         Output("port-refresh-trigger", "data", allow_duplicate=True),

@@ -266,6 +266,16 @@ def build_port_section(LBL, PANEL, C, FONT):
         html.Div([
             html.Div("Portfolio Performance", style={**LBL, "marginBottom": "0.4rem"},
                      className="theme-label"),
+            # Period buttons
+            html.Div([
+                html.Button("YTD", id="port-period-ytd", n_clicks=0, style={"backgroundColor": C["panel"], "color": C["text"], "border": f"1px solid {C['border']}", "borderRadius": "7px", "padding": "0.32rem 0.95rem", "fontFamily": FONT, "fontWeight": "700", "fontSize": "0.78rem", "marginRight": "0.3rem", "cursor": "pointer"}),
+                html.Button("MTD", id="port-period-mtd", n_clicks=0, style={"backgroundColor": C["panel"], "color": C["text"], "border": f"1px solid {C['border']}", "borderRadius": "7px", "padding": "0.32rem 0.95rem", "fontFamily": FONT, "fontWeight": "700", "fontSize": "0.78rem", "marginRight": "0.3rem", "cursor": "pointer"}),
+                html.Button("3M", id="port-period-3m", n_clicks=0, style={"backgroundColor": C["panel"], "color": C["text"], "border": f"1px solid {C['border']}", "borderRadius": "7px", "padding": "0.32rem 0.95rem", "fontFamily": FONT, "fontWeight": "700", "fontSize": "0.78rem", "marginRight": "0.3rem", "cursor": "pointer"}),
+                html.Button("6M", id="port-period-6m", n_clicks=0, style={"backgroundColor": C["panel"], "color": C["text"], "border": f"1px solid {C['border']}", "borderRadius": "7px", "padding": "0.32rem 0.95rem", "fontFamily": FONT, "fontWeight": "700", "fontSize": "0.78rem", "marginRight": "0.3rem", "cursor": "pointer"}),
+                html.Button("1Y", id="port-period-1y", n_clicks=0, style={"backgroundColor": C["panel"], "color": C["text"], "border": f"1px solid {C['border']}", "borderRadius": "7px", "padding": "0.32rem 0.95rem", "fontFamily": FONT, "fontWeight": "700", "fontSize": "0.78rem", "marginRight": "0.3rem", "cursor": "pointer"}),
+                html.Button("Max", id="port-period-max", n_clicks=0, style={"backgroundColor": C["panel"], "color": C["text"], "border": f"1px solid {C['border']}", "borderRadius": "7px", "padding": "0.32rem 0.95rem", "fontFamily": FONT, "fontWeight": "700", "fontSize": "0.78rem", "marginRight": "0.3rem", "cursor": "pointer"}),
+                html.Span(id="port-period-status", style={"color": C["muted"], "fontSize": "0.72rem", "fontFamily": FONT, "marginLeft": "0.7rem"}),
+            ], style={"display": "flex", "alignItems": "center", "marginBottom": "0.5rem"}),
             html.Div([
                 dcc.Dropdown(id="port-chart-mode",
                              options=[
@@ -280,7 +290,7 @@ def build_port_section(LBL, PANEL, C, FONT):
                     id="port-index-date",
                     placeholder="Start date",
                     display_format="DD-MM-YYYY",
-                    style={"marginLeft": "0.6rem"},
+                    style={"marginLeft": "0.6rem", "height": "38px", "padding": "0.32rem 0.7rem", "fontSize": "0.82rem", "fontFamily": FONT, "borderRadius": "8px"},
                 ),
                 dcc.Input(id="port-benchmark", type="text",
                           placeholder="Benchmark e.g. SPY, ^FTSE",
