@@ -60,6 +60,16 @@ def build_performance_section(LBL, PANEL, C, FONT):
                     ),
                 ]),
 
+                html.Div([
+                    html.Div("Start Date", style={**LBL, "marginBottom": "0.3rem"},
+                             className="theme-label"),
+                    dcc.DatePickerSingle(
+                        id="perf-start-date",
+                        placeholder="Optional",
+                        display_format="DD-MM-YYYY",
+                    ),
+                ]),
+
                 html.Button("Calculate", id="perf-run", n_clicks=0, style={
                     "backgroundColor": C["accent"], "color": "#000", "border": "none",
                     "borderRadius": "8px", "padding": "0.55rem 1.5rem",

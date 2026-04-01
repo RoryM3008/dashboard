@@ -219,9 +219,9 @@ def register_callbacks(app):
         # ── Rolling chart ─────────────────────────────────────────────────
         pct_RC_df, port_vol_s = rolling_risk_contrib(returns_df, weights_s, window=window)
 
-        # Pick top 8 by latest absolute contribution
+        # Pick top 20 by latest absolute contribution
         latest = pct_RC_df.iloc[-1].abs().sort_values(ascending=False)
-        top = list(latest.index[:8])
+        top = list(latest.index[:20])
 
         fig = go.Figure()
         for i, ticker in enumerate(top):
@@ -250,7 +250,7 @@ def register_callbacks(app):
             xaxis={"gridcolor": c["border"]},
             legend={"orientation": "h", "y": -0.18, "x": 0.5, "xanchor": "center",
                     "font": {"size": 10}},
-            title={"text": f"Rolling {win_lbl} % Risk Contribution (Top 8)",
+                 title={"text": f"Rolling {win_lbl} % Risk Contribution (Top 20)",
                    "font": {"size": 13}, "x": 0.5},
         )
 

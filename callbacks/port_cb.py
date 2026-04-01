@@ -852,6 +852,11 @@ def register_callbacks(app):
                 showlegend=has_benchmark,
                 legend={"font": {"size": 10}, "orientation": "h",
                         "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0},
+                hoverlabel={
+                    "bgcolor": c["panel"],
+                    "bordercolor": c["border"],
+                    "font": {"family": FONT, "color": c["text"], "size": 11},
+                },
             )
             chart_html = dcc.Graph(figure=fig, config={"displayModeBar": False})
 

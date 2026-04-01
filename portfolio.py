@@ -595,18 +595,20 @@ def compute_holdings(txns_df, last_prices=None):
         total_pnl = 0
     else:
         total_mv = holdings_df["market_value"].sum() or 0
-        if total_mv > 0:
-            holdings_df["weight_pct"] = (
-                holdings_df["market_value"].fillna(0) / total_mv * 100
-            ).round(1)
-        else:
-            holdings_df["weight_pct"] = 0.0
         total_pnl = holdings_df["total_pnl"].sum() or 0
 
     # Use cash override if user has set one
     cash_ov = get_cash_override()
     display_cash = cash_ov if cash_ov is not None else cash
     portfolio_value = total_mv + display_cash
+
+    # Weight as % of total portfolio (securities + cash), not only securities
+    if "market_value" in holdings_df.columns and portfolio_value > 0:
+        holdings_df["weight_pct"] = (
+            holdings_df["market_value"].fillna(0) / portfolio_value * 100
+        ).round(1)
+    else:
+        holdings_df["weight_pct"] = 0.0
 
     summary = {
         "total_mv": round(total_mv, 2),

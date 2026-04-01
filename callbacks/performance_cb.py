@@ -1,8 +1,10 @@
 """Callback — Portfolio Performance chart + weights table."""
 
 import re
+import pandas as pd
 
 import plotly.graph_objects as go
+from plotly.colors import sample_colorscale
 from dash import dcc, html, Input, Output, State
 
 from theme import FONT, get_theme
@@ -19,11 +21,15 @@ def register_callbacks(app):
         State("perf-tickers", "value"),
         State("perf-weights", "value"),
         State("perf-frequency", "value"),
+        State("perf-start-date", "date"),
         State("theme-store", "data"),
         prevent_initial_call=True,
     )
-    def calculate_portfolio_performance(n, raw_tickers, raw_weights, frequency, theme_mode):
+    def calculate_portfolio_performance(n, raw_tickers, raw_weights, frequency, start_date, theme_mode):
         c = get_theme(theme_mode or "dark")
+        is_dark = (theme_mode or "dark") == "dark"
+        hover_bg = "#1a1a1a" if is_dark else "#ffffff"
+        hover_fg = "#f2f2f2" if is_dark else "#1a1a1a"
         tickers = parse_tickers(raw_tickers)
         if len(tickers) < 1:
             return html.Div(), html.Div(), "Enter at least one ticker."
@@ -53,14 +59,39 @@ def register_callbacks(app):
         if port_index is None or component_index is None or used_weights is None:
             return html.Div(), html.Div(), "No usable price history found for these inputs."
 
+        # Optional: start from a selected date and rebase to 100 from that point
+        if start_date:
+            try:
+                start_dt = pd.Timestamp(start_date).normalize()
+                component_cut = component_index[component_index.index >= start_dt]
+                if component_cut.empty:
+                    return html.Div(), html.Div(), "Selected start date is after available data."
+                component_index = component_cut.divide(component_cut.iloc[0]).mul(100)
+                port_index = component_index.mul(used_weights, axis=1).sum(axis=1)
+            except Exception:
+                return html.Div(), html.Div(), "Invalid start date selection."
+
         fig = go.Figure()
+
+        # Colour component lines by performance rank: best = dark green, worst = dark red
+        end_vals = component_index.iloc[-1]
+        rank = end_vals.rank(method="min")
+        n_rank = max(len(rank) - 1, 1)
+        perf_scale = [
+            [0.0, "#7f1d1d"],  # dark red
+            [0.5, "#4a3f2a"],  # muted midpoint
+            [1.0, "#14532d"],  # dark green
+        ]
+
         for ticker in component_index.columns:
+            score = (rank[ticker] - 1) / n_rank  # 0 = worst, 1 = best
+            line_col = sample_colorscale(perf_scale, [float(score)])[0]
             fig.add_trace(go.Scatter(
                 x=component_index.index,
                 y=component_index[ticker],
                 mode="lines",
-                line={"width": 1.2, "color": c["muted"]},
-                opacity=0.5,
+                line={"width": 1.6, "color": line_col},
+                opacity=0.9,
                 name=ticker,
                 hovertemplate=f"{ticker}: %{{y:.2f}}<extra></extra>",
             ))
@@ -82,9 +113,21 @@ def register_callbacks(app):
             xaxis={"showgrid": False, "color": c["muted"], "linecolor": c["border"]},
             yaxis={"showgrid": True, "gridcolor": c["border"], "color": c["subtext"]},
             legend={"orientation": "h", "y": 1.02, "x": 0},
-            hovermode="x unified",
+            hovermode="closest",
+            hoverlabel={
+                "bgcolor": hover_bg,
+                "bordercolor": c["border"],
+                "font": {"family": FONT, "color": hover_fg, "size": 11},
+            },
             height=390,
         )
+
+        # Fallback at trace level (some themes/templates can override unified hover colors)
+        fig.update_traces(hoverlabel={
+            "bgcolor": hover_bg,
+            "bordercolor": c["border"],
+            "font": {"family": FONT, "color": hover_fg, "size": 11},
+        })
 
         rows = []
         for ticker, weight in used_weights.items():
@@ -120,9 +163,10 @@ def register_callbacks(app):
 
         total_return = ((float(port_index.iloc[-1]) / float(port_index.iloc[0])) - 1) * 100
         freq_label = (frequency or "weekly").capitalize()
+        start_txt = f" From {pd.Timestamp(start_date).strftime('%d-%b-%Y')}." if start_date else ""
         status = (
             f"{freq_label} portfolio performance across {len(used_weights)} ticker(s). "
-            f"Total return over shown period: {total_return:+.2f}%"
+            f"Total return over shown period: {total_return:+.2f}%.{start_txt}"
         )
 
         return dcc.Graph(figure=fig, config={"displayModeBar": False}), weights_table, status
