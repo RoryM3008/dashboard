@@ -42,7 +42,11 @@ def _fetch_watchlist_data(tickers):
             mc_fmt = (f"${mc/1e9:.2f}B" if mc and mc >= 1e9
                       else f"${mc/1e6:.1f}M" if mc else "—")
 
-            row = {"Ticker": ticker, "EV/Sales": ev_sales, "P/E": pe, "Mkt Cap": mc_fmt}
+            price = info.get("currentPrice") or info.get("regularMarketPrice")
+            ccy = info.get("currency", "")
+
+            row = {"Ticker": ticker, "Price": price, "Ccy": ccy,
+                   "EV/Sales": ev_sales, "P/E": pe, "Mkt Cap": mc_fmt}
 
             for label, period in period_map.items():
                 try:
@@ -58,7 +62,8 @@ def _fetch_watchlist_data(tickers):
 
             rows.append(row)
         except Exception:
-            rows.append({"Ticker": ticker, "EV/Sales": None, "P/E": None,
+            rows.append({"Ticker": ticker, "Price": None, "Ccy": "",
+                         "EV/Sales": None, "P/E": None,
                          "Mkt Cap": "—",
                          **{lbl: None for lbl in period_map}})
     return rows
@@ -176,7 +181,7 @@ def register_callbacks(app):
 
         metric_cols = ["EV/Sales", "P/E", "Mkt Cap"]
         return_cols = ["1D", "5D", "1W", "1M", "3M", "6M", "1Y", "2Y"]
-        all_cols    = ["Ticker"] + metric_cols + return_cols
+        all_cols    = ["Ticker", "Price"] + metric_cols + return_cols
 
         th_style = {
             "padding": "0.38rem 0.6rem", "fontSize": "0.62rem", "textTransform": "uppercase",
@@ -213,6 +218,20 @@ def register_callbacks(app):
                     cells.append(html.Td(val, style={
                         "color": c["text"], "fontWeight": "700",
                         "padding": "0.4rem 0.6rem",
+                        "borderBottom": "1px solid " + c["border"],
+                        "fontSize": "0.82rem", "fontFamily": FONT,
+                    }))
+                elif col == "Price":
+                    ccy = row.get("Ccy", "")
+                    ccy_sym = {"USD": "$", "GBP": "£", "GBp": "", "GBX": "", "EUR": "€"}.get(ccy, "")
+                    if val is not None:
+                        suffix = "p" if ccy in ("GBp", "GBX") else ""
+                        display = f"{ccy_sym}{val:,.2f}{suffix}"
+                    else:
+                        display = "\u2014"
+                    cells.append(html.Td(display, style={
+                        "color": c["accent"], "fontWeight": "700",
+                        "padding": "0.4rem 0.6rem", "textAlign": "right",
                         "borderBottom": "1px solid " + c["border"],
                         "fontSize": "0.82rem", "fontFamily": FONT,
                     }))

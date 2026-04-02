@@ -105,7 +105,7 @@ def register_callbacks(app):
             if t in close.columns:
                 s = close[t].dropna()
                 if len(s) >= 2 and s.iloc[0] != 0:
-                    returns[t] = (s.iloc[-1] / s.iloc[0] - 1) * 100
+                    returns[t] = round((s.iloc[-1] / s.iloc[0] - 1) * 100, 2)
 
         plot_rows = []
         for _, r in df.iterrows():
@@ -114,7 +114,7 @@ def register_callbacks(app):
                 plot_rows.append({
                     "label": r["ticker"],
                     "weight": max(float(r["weight_pct"]), 0.05),
-                    "ret_pct": float(returns[yft]),
+                    "ret_pct": round(float(returns[yft]), 2),
                 })
 
         if not plot_rows:
@@ -129,15 +129,15 @@ def register_callbacks(app):
             marker={
                 "colors": plot_df["ret_pct"],
                 "colorscale": [
-                    [0.0, "#7f1d1d"],
+                    [0.0, "#ff0101"],
                     [0.5, "#222222"],
-                    [1.0, "#14532d"],
+                    [1.0, "#05ff69"],
                 ],
                 "cmid": 0,
                 "line": {"color": c["border"], "width": 1},
                 "colorbar": {"title": "% Move", "tickformat": ".2f"},
             },
-            texttemplate="<b>%{label}</b><br>%{customdata[0]:.1f}%<br>%{customdata[1]:+.1f}%",
+            texttemplate="<b>%{label}</b><br>%{customdata[0]:.1f}%<br>%{customdata[1]:+.2f}%",
             customdata=plot_df[["weight", "ret_pct"]].values,
             hovertemplate="<b>%{label}</b><br>Weight: %{customdata[0]:.2f}%<br>Move: %{customdata[1]:+.2f}%<extra></extra>",
         ))
@@ -160,4 +160,8 @@ def register_callbacks(app):
             f"Displayed weight sum: {shown_weight:.1f}%"
         )
 
-        return dcc.Graph(figure=fig, config={"displayModeBar": False}), status
+        return dcc.Graph(
+            figure=fig,
+            config={"displayModeBar": False},
+            style={"height": "520px", "maxWidth": "900px", "margin": "0 auto"},
+        ), status

@@ -125,6 +125,68 @@ def build_risk_section(LBL, PANEL, C, FONT):
                             "fontFamily": FONT, "marginBottom": "0.6rem"},
                      className="theme-muted"),
 
+            # ── Underlying price overrides for risk ─────────────────────
+            html.Details([
+                html.Summary("Underlying Prices (Risk)", style={
+                    "color": C["accent"], "fontSize": "0.76rem", "fontFamily": FONT,
+                    "fontWeight": "700", "cursor": "pointer", "letterSpacing": "0.03em",
+                }),
+                html.Div([
+                    html.Div("Override local prices by date+ticker for Risk calculations.",
+                             style={"color": C["muted"], "fontSize": "0.7rem",
+                                    "fontFamily": FONT, "marginBottom": "0.5rem"}),
+                    html.Div([
+                        dcc.DatePickerSingle(
+                            id="risk-price-ovr-date",
+                            placeholder="Date",
+                            display_format="DD-MM-YYYY",
+                            style={"height": "36px", "fontSize": "0.8rem", "fontFamily": FONT},
+                        ),
+                        dcc.Input(
+                            id="risk-price-ovr-ticker",
+                            type="text",
+                            placeholder="Ticker e.g. R2SC.L",
+                            className="theme-input",
+                            style={"width": "125px", "fontSize": "0.8rem", "fontFamily": FONT,
+                                   "backgroundColor": C["bg"], "color": C["text"],
+                                   "border": f"1px solid {C['border']}", "borderRadius": "6px",
+                                   "padding": "0.3rem 0.5rem"},
+                        ),
+                        dcc.Input(
+                            id="risk-price-ovr-value",
+                            type="number",
+                            step=0.0001,
+                            placeholder="Price (local)",
+                            className="theme-input",
+                            style={"width": "130px", "fontSize": "0.8rem", "fontFamily": FONT,
+                                   "backgroundColor": C["bg"], "color": C["text"],
+                                   "border": f"1px solid {C['border']}", "borderRadius": "6px",
+                                   "padding": "0.3rem 0.5rem"},
+                        ),
+                        html.Button("Set / Update", id="risk-price-ovr-set", n_clicks=0, style={
+                            "backgroundColor": C["blue"], "color": "#fff", "border": "none",
+                            "borderRadius": "8px", "padding": "0.35rem 0.8rem",
+                            "fontFamily": FONT, "fontWeight": "700", "fontSize": "0.75rem",
+                            "cursor": "pointer"}),
+                        html.Button("Clear Selected", id="risk-price-ovr-clear", n_clicks=0, style={
+                            "backgroundColor": "transparent", "color": C["muted"],
+                            "border": f"1px solid {C['border']}",
+                            "borderRadius": "8px", "padding": "0.35rem 0.8rem",
+                            "fontFamily": FONT, "fontWeight": "600", "fontSize": "0.75rem",
+                            "cursor": "pointer"}),
+                        html.Button("Clear All", id="risk-price-ovr-clear-all", n_clicks=0, style={
+                            "backgroundColor": "transparent", "color": C["red"],
+                            "border": f"1px solid {C['red']}",
+                            "borderRadius": "8px", "padding": "0.35rem 0.8rem",
+                            "fontFamily": FONT, "fontWeight": "600", "fontSize": "0.75rem",
+                            "cursor": "pointer"}),
+                    ], style={"display": "flex", "alignItems": "center", "gap": "0.45rem", "flexWrap": "wrap"}),
+                    html.Div(id="risk-price-ovr-status", style={"color": C["muted"], "fontSize": "0.72rem",
+                             "fontFamily": FONT, "marginTop": "0.45rem"}),
+                    html.Div(id="risk-price-ovr-table", style={"overflowX": "auto", "marginTop": "0.55rem"}),
+                ], style={"marginTop": "0.55rem"}),
+            ], style={"marginBottom": "0.7rem"}),
+
             # ── Outputs ───────────────────────────────────────────────────
             html.Div(id="risk-status",
                      style={"color": C["muted"], "fontSize": "0.75rem",

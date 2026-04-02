@@ -16,6 +16,7 @@ from portfolio import (
     clear_all_transactions,
     import_csv, export_csv, compute_holdings, compute_portfolio_ts,
     set_cash_override, get_cash_override, clear_cash_override,
+    set_price_override, clear_price_override, list_price_overrides,
 )
 
 _COLOURS = [
@@ -340,6 +341,44 @@ def _render_past_positions(hdf, c):
     ], style={"marginTop": "1.2rem"})
 
 
+def _render_price_overrides_table(df, c):
+    """Render underlying price overrides table."""
+    if df.empty:
+        return html.Div("No price overrides set.",
+                        style={"color": c["muted"], "fontSize": "0.78rem", "fontFamily": FONT})
+
+    th_s = {
+        "padding": "0.28rem 0.5rem", "fontSize": "0.6rem", "fontWeight": "700",
+        "textTransform": "uppercase", "letterSpacing": "0.05em",
+        "borderBottom": f"2px solid {c['border']}", "fontFamily": FONT,
+        "color": c["muted"], "whiteSpace": "nowrap",
+    }
+    td_s = {
+        "padding": "0.28rem 0.5rem", "fontSize": "0.75rem", "fontFamily": FONT,
+        "color": c["text"], "borderBottom": f"1px solid {c['border']}",
+        "whiteSpace": "nowrap",
+    }
+
+    header = html.Thead(html.Tr([
+        html.Th("Date", style=th_s),
+        html.Th("Ticker", style=th_s),
+        html.Th("Local Price", style={**th_s, "textAlign": "right"}),
+        html.Th("Notes", style=th_s),
+    ]))
+
+    rows = []
+    for _, r in df.iterrows():
+        rows.append(html.Tr([
+            html.Td(str(r.get("date", "")), style=td_s),
+            html.Td(str(r.get("ticker", "")), style={**td_s, "color": c["accent"], "fontWeight": "700"}),
+            html.Td(f"{float(r.get('price_local', 0)):,.4f}", style={**td_s, "textAlign": "right"}),
+            html.Td(str(r.get("notes", "") or ""), style={**td_s, "color": c["subtext"]}),
+        ]))
+
+    return html.Table([header, html.Tbody(rows)],
+                      style={"width": "100%", "borderCollapse": "collapse"})
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Callbacks
 # ─────────────────────────────────────────────────────────────────────────────
@@ -635,6 +674,63 @@ def register_callbacks(app):
         clear_cash_override()
         return (trigger or 0) + 1, "✓ Cash override removed — using calculated value."
 
+    # ── 2e) Underlying price overrides ───────────────────────────────
+    @app.callback(
+        Output("port-refresh-trigger", "data", allow_duplicate=True),
+        Output("port-price-ovr-status", "children"),
+        Output("port-price-ovr-ticker", "value"),
+        Output("port-price-ovr-value", "value"),
+        Input("port-price-ovr-set", "n_clicks"),
+        Input("port-price-ovr-clear", "n_clicks"),
+        Input("port-price-ovr-clear-all", "n_clicks"),
+        State("port-price-ovr-date", "date"),
+        State("port-price-ovr-ticker", "value"),
+        State("port-price-ovr-value", "value"),
+        State("port-refresh-trigger", "data"),
+        prevent_initial_call=True,
+    )
+    def manage_price_overrides(n_set, n_clear, n_clear_all, ovr_date, ticker, value, trigger):
+        ctx = dash.callback_context
+        if not ctx.triggered:
+            return no_update, no_update, no_update, no_update
+
+        action = ctx.triggered[0]["prop_id"].split(".")[0]
+
+        if action == "port-price-ovr-clear-all":
+            clear_price_override()
+            return (trigger or 0) + 1, "✓ Cleared all underlying price overrides.", "", None
+
+        if not ovr_date or not ticker:
+            return no_update, "⚠ Select a date and ticker.", no_update, no_update
+
+        t = (ticker or "").upper().strip()
+
+        if action == "port-price-ovr-clear":
+            clear_price_override(ovr_date, t)
+            return (trigger or 0) + 1, f"✓ Cleared override for {t} on {ovr_date}.", "", None
+
+        # Set/Update
+        try:
+            px = float(value)
+        except (ValueError, TypeError):
+            return no_update, "⚠ Enter a valid local price.", no_update, no_update
+
+        if px <= 0:
+            return no_update, "⚠ Price must be > 0.", no_update, no_update
+
+        set_price_override(ovr_date, t, px)
+        return (trigger or 0) + 1, f"✓ Override set: {t} on {ovr_date} = {px:,.4f}", "", None
+
+    @app.callback(
+        Output("port-price-ovr-table", "children"),
+        Input("port-refresh-trigger", "data"),
+        State("theme-store", "data"),
+    )
+    def render_price_override_table(trigger, theme_mode):
+        c = get_theme(theme_mode or "dark")
+        df = list_price_overrides()
+        return _render_price_overrides_table(df, c)
+
     # ── 3) CSV import ─────────────────────────────────────────────────────
     @app.callback(
         Output("port-refresh-trigger", "data", allow_duplicate=True),
@@ -690,11 +786,12 @@ def register_callbacks(app):
         Input("port-refresh-trigger", "data"),
         Input("port-refresh",         "n_clicks"),
         Input("port-chart-mode",      "value"),
+        Input("port-show-net-deposits", "value"),
         Input("port-index-date",      "date"),
         Input("port-benchmark",       "value"),
         State("theme-store",          "data"),
     )
-    def render_all(trigger, n_refresh, chart_mode, index_date, benchmark_ticker, theme_mode):
+    def render_all(trigger, n_refresh, chart_mode, show_net_deposits, index_date, benchmark_ticker, theme_mode):
         c = get_theme(theme_mode or "dark")
 
         txns = load_transactions()
@@ -763,6 +860,29 @@ def register_callbacks(app):
                     pass
 
             fig = go.Figure()
+            show_deposits = isinstance(show_net_deposits, list) and ("on" in show_net_deposits)
+
+            # Build cumulative net deposits over selected range (deposits - withdrawals)
+            net_dep_series = None
+            if show_deposits:
+                flow_rows = []
+                for _, r in txns.iterrows():
+                    side = str(r.get("side", "")).upper()
+                    if side not in ("DEPOSIT", "WITHDRAW"):
+                        continue
+                    d = pd.Timestamp(r.get("date")).normalize()
+                    _tg = r.get("total_gbp")
+                    amt = float(_tg) if (_tg is not None and not pd.isna(_tg)) else float(r.get("price", 0) or 0)
+                    signed_amt = amt if side == "DEPOSIT" else -amt
+                    flow_rows.append((d, signed_amt))
+
+                if flow_rows:
+                    flows = pd.DataFrame(flow_rows, columns=["date", "flow"]).groupby("date")["flow"].sum().sort_index()
+                    all_idx = ts_plot.index.union(flows.index).sort_values()
+                    net_all = flows.reindex(all_idx, fill_value=0.0).cumsum()
+                    net_dep_series = net_all.reindex(ts_plot.index, method="ffill").fillna(0.0)
+                else:
+                    net_dep_series = pd.Series(0.0, index=ts_plot.index)
 
             if chart_mode == "value":
                 fig.add_trace(go.Scatter(
@@ -773,6 +893,15 @@ def register_callbacks(app):
                     fillcolor=f"rgba(255,140,0,0.08)",
                     hovertemplate="£%{y:,.2f}<extra></extra>",
                 ))
+                if net_dep_series is not None and not net_dep_series.empty:
+                    fig.add_trace(go.Scatter(
+                        x=net_dep_series.index,
+                        y=net_dep_series.values,
+                        mode="lines",
+                        name="Net Deposits",
+                        line={"color": c["muted"], "width": 1.8, "dash": "dot"},
+                        hovertemplate="Net Deposits: £%{y:,.2f}<extra></extra>",
+                    ))
                 y_title = "Portfolio Value (£)"
             elif chart_mode == "return":
                 if "twr" in ts_plot.columns:

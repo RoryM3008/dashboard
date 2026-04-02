@@ -262,6 +262,62 @@ def build_port_section(LBL, PANEL, C, FONT):
             ], style={"display": "flex", "alignItems": "center", "marginTop": "0.4rem"}),
         ], style=PANEL, className="theme-panel"),
 
+        # ── Underlying price overrides (portfolio-only) ─────────────────
+        html.Div([
+            html.Details([
+                html.Summary("Underlying Prices", style={
+                    "color": C["accent"], "fontSize": "0.78rem", "fontFamily": FONT,
+                    "fontWeight": "700", "cursor": "pointer", "letterSpacing": "0.03em",
+                }),
+                html.Div([
+                    html.Div("Override local prices by date+ticker for Portfolio calculations.",
+                             style={"color": C["muted"], "fontSize": "0.72rem",
+                                    "fontFamily": FONT, "marginBottom": "0.6rem"}),
+                    html.Div([
+                        dcc.DatePickerSingle(
+                            id="port-price-ovr-date",
+                            placeholder="Date",
+                            display_format="DD-MM-YYYY",
+                            style={"height": "36px", "fontSize": "0.8rem", "fontFamily": FONT},
+                        ),
+                        dcc.Input(id="port-price-ovr-ticker", type="text", placeholder="Ticker e.g. R2SC.L",
+                                  className="theme-input",
+                                  style={"width": "120px", "fontSize": "0.8rem", "fontFamily": FONT,
+                                         "backgroundColor": C["bg"], "color": C["text"],
+                                         "border": f"1px solid {C['border']}", "borderRadius": "6px",
+                                         "padding": "0.3rem 0.5rem"}),
+                        dcc.Input(id="port-price-ovr-value", type="number", step=0.0001,
+                                  placeholder="Price (local)",
+                                  className="theme-input",
+                                  style={"width": "130px", "fontSize": "0.8rem", "fontFamily": FONT,
+                                         "backgroundColor": C["bg"], "color": C["text"],
+                                         "border": f"1px solid {C['border']}", "borderRadius": "6px",
+                                         "padding": "0.3rem 0.5rem"}),
+                        html.Button("Set / Update", id="port-price-ovr-set", n_clicks=0, style={
+                            "backgroundColor": C["blue"], "color": "#fff", "border": "none",
+                            "borderRadius": "8px", "padding": "0.35rem 0.8rem",
+                            "fontFamily": FONT, "fontWeight": "700", "fontSize": "0.75rem",
+                            "cursor": "pointer"}),
+                        html.Button("Clear Selected", id="port-price-ovr-clear", n_clicks=0, style={
+                            "backgroundColor": "transparent", "color": C["muted"],
+                            "border": f"1px solid {C['border']}",
+                            "borderRadius": "8px", "padding": "0.35rem 0.8rem",
+                            "fontFamily": FONT, "fontWeight": "600", "fontSize": "0.75rem",
+                            "cursor": "pointer"}),
+                        html.Button("Clear All", id="port-price-ovr-clear-all", n_clicks=0, style={
+                            "backgroundColor": "transparent", "color": C["red"],
+                            "border": f"1px solid {C['red']}",
+                            "borderRadius": "8px", "padding": "0.35rem 0.8rem",
+                            "fontFamily": FONT, "fontWeight": "600", "fontSize": "0.75rem",
+                            "cursor": "pointer"}),
+                    ], style={"display": "flex", "alignItems": "center", "gap": "0.45rem", "flexWrap": "wrap"}),
+                    html.Div(id="port-price-ovr-status", style={"color": C["muted"], "fontSize": "0.72rem",
+                             "fontFamily": FONT, "marginTop": "0.5rem"}),
+                    html.Div(id="port-price-ovr-table", style={"overflowX": "auto", "marginTop": "0.6rem"}),
+                ], style={"marginTop": "0.6rem"}),
+            ]),
+        ], style=PANEL, className="theme-panel"),
+
         # ── Performance chart ─────────────────────────────────────────────
         html.Div([
             html.Div("Portfolio Performance", style={**LBL, "marginBottom": "0.4rem"},
@@ -286,6 +342,14 @@ def build_port_section(LBL, PANEL, C, FONT):
                              ],
                              value="value", clearable=False,
                              style={"width": "220px", "fontSize": "0.82rem"}),
+                dcc.Checklist(
+                    id="port-show-net-deposits",
+                    options=[{"label": " Show Net Deposits", "value": "on"}],
+                    value=[],
+                    style={"marginLeft": "0.6rem", "fontSize": "0.78rem", "fontFamily": FONT,
+                           "color": C["subtext"], "alignSelf": "center"},
+                    inputStyle={"marginRight": "0.3rem"},
+                ),
                 dcc.DatePickerSingle(
                     id="port-index-date",
                     placeholder="Start date",

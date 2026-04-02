@@ -220,6 +220,83 @@ def clear_cash_override():
         con.execute("DELETE FROM cash_override")
 
 
+def _init_price_override_table():
+    """Create the manual underlying price override table if needed."""
+    with _conn() as con:
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS price_override (
+                date        TEXT NOT NULL,
+                ticker      TEXT NOT NULL,
+                price_local REAL NOT NULL,
+                notes       TEXT DEFAULT '',
+                PRIMARY KEY (date, ticker)
+            )
+            """
+        )
+
+
+def set_price_override(override_date, ticker, price_local, notes=""):
+    """Upsert a manual local-currency price for a specific date and ticker."""
+    _init_price_override_table()
+    with _conn() as con:
+        con.execute(
+            """
+            INSERT OR REPLACE INTO price_override (date, ticker, price_local, notes)
+            VALUES (?, ?, ?, ?)
+            """,
+            (str(override_date).strip(), (ticker or "").upper().strip(), float(price_local), notes or ""),
+        )
+
+
+def clear_price_override(override_date=None, ticker=None):
+    """Delete manual price overrides.
+
+    - If both date and ticker are provided: delete that one row.
+    - Otherwise: delete all rows.
+    """
+    _init_price_override_table()
+    with _conn() as con:
+        if override_date and ticker:
+            con.execute(
+                "DELETE FROM price_override WHERE date = ? AND ticker = ?",
+                (str(override_date).strip(), (ticker or "").upper().strip()),
+            )
+        else:
+            con.execute("DELETE FROM price_override")
+
+
+def list_price_overrides():
+    """Return manual price overrides as a DataFrame."""
+    _init_price_override_table()
+    with _conn() as con:
+        return pd.read_sql(
+            "SELECT date, ticker, price_local, notes FROM price_override ORDER BY date DESC, ticker",
+            con,
+        )
+
+
+def _get_price_override_map():
+    """Return dict keyed by (date_iso, ticker) -> local price."""
+    _init_price_override_table()
+    with _conn() as con:
+        rows = con.execute("SELECT date, ticker, price_local FROM price_override").fetchall()
+    return {(str(d), str(t).upper().strip()): float(p) for d, t, p in rows}
+
+
+def _get_latest_price_override_map():
+    """Return dict keyed by ticker -> latest overridden local price."""
+    df = list_price_overrides()
+    if df.empty:
+        return {}
+    out = {}
+    for _, r in df.sort_values("date", ascending=False).iterrows():
+        t = str(r.get("ticker", "")).upper().strip()
+        if t and t not in out:
+            out[t] = float(r.get("price_local", 0))
+    return out
+
+
 def import_csv(csv_text):
     """Bulk-insert transactions from CSV text. Returns count inserted."""
     df = pd.read_csv(io.StringIO(csv_text))
@@ -525,6 +602,8 @@ def compute_holdings(txns_df, last_prices=None):
     else:
         ticker_ccy = _detect_ccy(tickers)
 
+    latest_overrides = _get_latest_price_override_map()
+
     rows = []
     for t in tickers:
         open_lots = lots.get(t, [])
@@ -533,7 +612,7 @@ def compute_holdings(txns_df, last_prices=None):
             continue
         total_cost = sum(l[0] * l[1] for l in open_lots)  # GBP cost
         avg_cost = total_cost / shares if shares > 0 else 0  # GBP per share
-        lp_raw = last_prices.get(t)
+        lp_raw = latest_overrides.get(t, last_prices.get(t))
         ccy = ticker_ccy.get(t, "USD")
         if ccy in ("GBp", "GBX"):
             lp_gbp = lp_raw / 100 if lp_raw else None       # pence → pounds
@@ -748,6 +827,7 @@ def compute_portfolio_ts(txns_df, return_debug=False):
 
     daily_values = []
     debug_rows = []
+    price_overrides = _get_price_override_map()
 
     for dt in dates:
         dt_date = pd.Timestamp(dt).normalize()
@@ -805,27 +885,41 @@ def compute_portfolio_ts(txns_df, return_debug=False):
         mv = 0.0
         debug_stock = {}
         for t, shares in holdings.items():
-            if shares > 0 and t in price_df.columns:
+            if shares <= 0:
+                continue
+
+            date_key = dt_date.strftime("%Y-%m-%d")
+            override_px = price_overrides.get((date_key, t))
+
+            local_price = None
+            if override_px is not None:
+                local_price = override_px
+            elif t in price_df.columns:
                 px = price_df.loc[:dt, t].dropna()
                 if not px.empty:
                     local_price = px.iloc[-1]
-                    if t in gbp_native:
-                        gbp_val = shares * local_price
-                        fx_used = 1.0
-                    elif t in eur_tickers:
-                        gbp_val = shares * local_price / day_fx_eur
-                        fx_used = day_fx_eur
-                    else:  # USD
-                        gbp_val = shares * local_price / day_fx_usd
-                        fx_used = day_fx_usd
-                    mv += gbp_val
-                    if return_debug:
-                        debug_stock[t] = {
-                            "qty": round(shares, 4),
-                            "local_price": round(local_price, 4),
-                            "fx": round(fx_used, 6),
-                            "gbp_value": round(gbp_val, 2),
-                        }
+
+            if local_price is None:
+                continue
+
+            if t in gbp_native:
+                gbp_val = shares * local_price
+                fx_used = 1.0
+            elif t in eur_tickers:
+                gbp_val = shares * local_price / day_fx_eur
+                fx_used = day_fx_eur
+            else:  # USD
+                gbp_val = shares * local_price / day_fx_usd
+                fx_used = day_fx_usd
+
+            mv += gbp_val
+            if return_debug:
+                debug_stock[t] = {
+                    "qty": round(shares, 4),
+                    "local_price": round(local_price, 4),
+                    "fx": round(fx_used, 6),
+                    "gbp_value": round(gbp_val, 2),
+                }
 
         pv = cash + mv
         daily_values.append({"date": dt, "portfolio_value": pv})

@@ -3,11 +3,19 @@
 import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
+import dash
 from dash import dcc, html, Input, Output, State, no_update
 
 from theme import FONT, get_theme
 from data import parse_tickers, risk_contrib, rolling_risk_contrib
-from portfolio import load_transactions, compute_holdings, _resolve_ticker
+from portfolio import (
+    load_transactions,
+    compute_holdings,
+    _resolve_ticker,
+    set_price_override,
+    clear_price_override,
+    list_price_overrides,
+)
 
 _COLOURS = [
     "#ff8c00", "#4296f5", "#00d26a", "#ff3333", "#a855f7",
@@ -41,7 +49,7 @@ def _download_returns(tickers, period="3y"):
         progress=False,
     )
     if raw is None or raw.empty:
-        return None
+        return None, 0
 
     if isinstance(raw.columns, pd.MultiIndex):
         price_df = raw.get("Close")
@@ -51,10 +59,126 @@ def _download_returns(tickers, period="3y"):
     if isinstance(price_df, pd.Series):
         price_df = price_df.to_frame(name=tickers[0])
 
-    return price_df.pct_change().dropna(how="all")
+    applied = _apply_price_overrides_to_prices(price_df)
+    returns = price_df.pct_change().dropna(how="all")
+    return returns, applied
+
+
+def _apply_price_overrides_to_prices(price_df):
+    """Apply date+ticker manual local-price overrides onto a price DataFrame."""
+    try:
+        ovr = list_price_overrides()
+    except Exception:
+        return 0
+
+    if ovr is None or ovr.empty or price_df is None or price_df.empty:
+        return 0
+
+    px = price_df.copy()
+    px.index = pd.to_datetime(px.index, errors="coerce").normalize()
+    applied = 0
+
+    for _, r in ovr.iterrows():
+        ticker = str(r.get("ticker", "")).upper().strip()
+        if ticker not in px.columns:
+            continue
+        try:
+            d = pd.to_datetime(r.get("date"), errors="coerce").normalize()
+            p = float(r.get("price_local"))
+        except Exception:
+            continue
+        if pd.isna(d) or pd.isna(p):
+            continue
+        if d in px.index:
+            px.at[d, ticker] = p
+            applied += 1
+
+    price_df.loc[:, :] = px.values
+    return applied
+
+
+def _render_price_overrides_table(df, c):
+    """Render underlying price overrides table."""
+    if df.empty:
+        return html.Div("No price overrides set.",
+                        style={"color": c["muted"], "fontSize": "0.78rem", "fontFamily": FONT})
+
+    th_s = {
+        "padding": "0.28rem 0.5rem", "fontSize": "0.6rem", "fontWeight": "700",
+        "textTransform": "uppercase", "letterSpacing": "0.05em",
+        "borderBottom": f"2px solid {c['border']}", "fontFamily": FONT,
+        "color": c["muted"], "whiteSpace": "nowrap",
+    }
+    td_s = {
+        "padding": "0.28rem 0.5rem", "fontSize": "0.75rem", "fontFamily": FONT,
+        "color": c["text"], "borderBottom": f"1px solid {c['border']}",
+        "whiteSpace": "nowrap",
+    }
+
+    header = html.Thead(html.Tr([
+        html.Th("Date", style=th_s),
+        html.Th("Ticker", style=th_s),
+        html.Th("Local Price", style={**th_s, "textAlign": "right"}),
+        html.Th("Notes", style=th_s),
+    ]))
+
+    rows = []
+    for _, r in df.iterrows():
+        rows.append(html.Tr([
+            html.Td(str(r.get("date", "")), style=td_s),
+            html.Td(str(r.get("ticker", "")), style={**td_s, "color": c["accent"], "fontWeight": "700"}),
+            html.Td(f"{float(r.get('price_local', 0)):,.4f}", style={**td_s, "textAlign": "right"}),
+            html.Td(str(r.get("notes", "") or ""), style={**td_s, "color": c["subtext"]}),
+        ]))
+
+    return html.Table([header, html.Tbody(rows)],
+                      style={"width": "100%", "borderCollapse": "collapse"})
 
 
 def register_callbacks(app):
+
+    @app.callback(
+        Output("risk-price-ovr-status", "children"),
+        Output("risk-price-ovr-table", "children"),
+        Input("risk-price-ovr-set", "n_clicks"),
+        Input("risk-price-ovr-clear", "n_clicks"),
+        Input("risk-price-ovr-clear-all", "n_clicks"),
+        State("risk-price-ovr-date", "date"),
+        State("risk-price-ovr-ticker", "value"),
+        State("risk-price-ovr-value", "value"),
+        State("theme-store", "data"),
+        prevent_initial_call=True,
+    )
+    def manage_risk_price_overrides(set_clicks, clear_clicks, clear_all_clicks,
+                                    override_date, ticker, price_local, theme_mode):
+        c = get_theme(theme_mode or "dark")
+        trig = (dash.callback_context.triggered[0]["prop_id"].split(".")[0]
+                if dash.callback_context.triggered else "")
+
+        try:
+            if trig == "risk-price-ovr-set":
+                if not override_date or not ticker or price_local is None:
+                    msg = "Enter date, ticker and price to set an override."
+                else:
+                    set_price_override(override_date, ticker, float(price_local), notes="risk")
+                    msg = f"Saved override: {ticker.upper().strip()} on {override_date}."
+            elif trig == "risk-price-ovr-clear":
+                if not override_date or not ticker:
+                    msg = "Enter date and ticker to clear a selected override."
+                else:
+                    clear_price_override(override_date, ticker)
+                    msg = f"Cleared override: {ticker.upper().strip()} on {override_date}."
+            elif trig == "risk-price-ovr-clear-all":
+                clear_price_override()
+                msg = "Cleared all price overrides."
+            else:
+                msg = ""
+        except Exception as exc:
+            msg = f"Error: {exc}"
+
+        ovr = list_price_overrides()
+        table = _render_price_overrides_table(ovr, c)
+        return msg, table
 
     # ── Load tickers + weights from Portfolio blotter ──────────────────
     @app.callback(
@@ -127,7 +251,7 @@ def register_callbacks(app):
                 all_tickers.append(bench_ticker)
 
         # Download
-        returns_df = _download_returns(all_tickers, period=history or "3y")
+        returns_df, n_ovr = _download_returns(all_tickers, period=history or "3y")
         if returns_df is None or returns_df.empty:
             return html.Div(), html.Div(), "No return data available — check tickers."
 
@@ -256,5 +380,7 @@ def register_callbacks(app):
 
         status = (f"{summary}  •  Rolling window: {win_lbl}"
                   + (f"  •  Benchmark: {bench_ticker}" if bench_ticker else ""))
+        if n_ovr:
+            status += f"  •  Price overrides applied: {int(n_ovr)}"
 
         return table, dcc.Graph(figure=fig, config={"displayModeBar": False}), status
