@@ -37,6 +37,7 @@ from pages.port_page import build_port_section
 from pages.prices_page import build_prices_section
 from pages.risk_page import build_risk_section
 from pages.heatmap_page import build_heatmap_section
+from pages.spread_page import build_spread_section
 
 # -- Callback modules (each has register_callbacks(app)) ----------------------
 from callbacks import (
@@ -52,6 +53,7 @@ from callbacks import (
     prices_cb,
     risk_cb,
     heatmap_cb,
+    spread_cb,
 )
 
 # -----------------------------------------------------------------------------
@@ -85,7 +87,7 @@ app.layout = html.Div(id="root-container", style={
     html.Div([
         html.Div("\U0001F4C8", style={"fontSize": "1.9rem"}),
         html.Div([
-            html.H1("Stock Dashboard", id="title-text",
+            html.H1("Investment Dashboard", id="title-text",
                      style={"margin": 0, "fontFamily": FONT, "fontWeight": "800",
                             "fontSize": "1.7rem", "color": C["text"]}),
             html.Div("Live market \u00b7 Earnings \u00b7 News \u00b7 Stock Analyser",
@@ -143,6 +145,7 @@ app.layout = html.Div(id="root-container", style={
             html.Button("Prices",        id="menu-prices",      n_clicks=0, style=MAIN_MENU_BTN),
             html.Button("Risk",          id="menu-risk",        n_clicks=0, style=MAIN_MENU_BTN),
             html.Button("Heatmap",       id="menu-heatmap",     n_clicks=0, style=MAIN_MENU_BTN),
+            html.Button("Spread",        id="menu-spread",      n_clicks=0, style=MAIN_MENU_BTN),
             dcc.Store(id="active-main-menu", data="dashboard"),
         ], id="sidebar-panel", className="theme-panel", style={**PANEL, "width": "220px", "padding": "0.9rem", "display": "flex",
                   "flexDirection": "column", "gap": "0.45rem", "position": "sticky", "top": "1rem"}),
@@ -161,6 +164,7 @@ app.layout = html.Div(id="root-container", style={
             build_prices_section(LBL, PANEL, C, FONT),
             build_risk_section(LBL, PANEL, C, FONT),
             build_heatmap_section(LBL, PANEL, C, FONT),
+            build_spread_section(LBL, PANEL, C, FONT),
         ], style={"flex": "1", "minWidth": "280px"}),
     ], style={"display": "flex", "gap": "1rem", "alignItems": "flex-start", "flexWrap": "wrap"}),
 
@@ -182,6 +186,7 @@ port_cb.register_callbacks(app)
 prices_cb.register_callbacks(app)
 risk_cb.register_callbacks(app)
 heatmap_cb.register_callbacks(app)
+spread_cb.register_callbacks(app)
 
 # ── Theme toggle callback ────────────────────────────────────────────────────
 

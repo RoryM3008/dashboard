@@ -74,10 +74,14 @@ def register_callbacks(app):
         if not yf_tickers:
             return html.Div(), "No valid tickers available."
 
+        # For 1d period yfinance returns only 1 row, need at least 2 for a return
+        dl_period = "5d" if period == "1d" else (period or "1mo")
+        is_1d = period == "1d"
+
         try:
             raw = yf.download(
                 tickers=yf_tickers,
-                period=period or "1mo",
+                period=dl_period,
                 interval="1d",
                 auto_adjust=True,
                 progress=False,
@@ -104,8 +108,15 @@ def register_callbacks(app):
         for t in yf_tickers:
             if t in close.columns:
                 s = close[t].dropna()
-                if len(s) >= 2 and s.iloc[0] != 0:
-                    returns[t] = round((s.iloc[-1] / s.iloc[0] - 1) * 100, 2)
+                if is_1d:
+                    # 1D: use last two available closes (yesterday vs today)
+                    if len(s) >= 2 and s.iloc[-2] != 0:
+                        returns[t] = round((s.iloc[-1] / s.iloc[-2] - 1) * 100, 2)
+                    elif len(s) == 1:
+                        returns[t] = 0.0   # only one data point → 0% change
+                else:
+                    if len(s) >= 2 and s.iloc[0] != 0:
+                        returns[t] = round((s.iloc[-1] / s.iloc[0] - 1) * 100, 2)
 
         plot_rows = []
         for _, r in df.iterrows():

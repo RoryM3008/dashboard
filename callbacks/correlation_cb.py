@@ -144,10 +144,11 @@ def register_callbacks(app):
         State("rolling-corr-others",  "value"),
         State("rolling-corr-window",  "value"),
         State("rolling-corr-history", "value"),
+        State("rolling-corr-freq",    "value"),
         State("theme-store",          "data"),
         prevent_initial_call=True,
     )
-    def rolling_correlation(n, base_raw, others_raw, window, history, theme_mode):
+    def rolling_correlation(n, base_raw, others_raw, window, history, freq, theme_mode):
         c = get_theme(theme_mode or "dark")
 
         base_tickers = parse_tickers(base_raw)
@@ -190,8 +191,16 @@ def register_callbacks(app):
         if not others_available:
             return html.Div(), "No data for comparison tickers."
 
+        # Resample prices to chosen frequency before computing returns
+        freq = freq or "daily"
+        _resample_rule = {"weekly": "W-FRI", "monthly": "ME"}
+        if freq in _resample_rule:
+            price_df = price_df[available].resample(_resample_rule[freq]).last().dropna(how="all")
         returns = price_df[available].pct_change().dropna(how="all")
         window = int(window) if window else 63
+
+        freq_labels = {"daily": "Daily", "weekly": "Weekly", "monthly": "Monthly"}
+        freq_label = freq_labels.get(freq, "Daily")
 
         fig = go.Figure()
         for i, other in enumerate(others_available):
@@ -226,11 +235,11 @@ def register_callbacks(app):
             xaxis={"gridcolor": c["border"]},
             legend={"orientation": "h", "y": -0.15, "x": 0.5, "xanchor": "center",
                     "font": {"size": 10}},
-            title={"text": f"Rolling {win_label} Correlation (Daily Returns)",
+            title={"text": f"Rolling {win_label} Correlation ({freq_label} Returns)",
                    "font": {"size": 13}, "x": 0.5},
         )
 
         pairs_str = ", ".join(f"{base} vs {t}" for t in others_available)
-        status = f"{win_label} rolling window  •  {pairs_str}"
+        status = f"{win_label} rolling window  •  {freq_label} returns  •  {pairs_str}"
 
         return dcc.Graph(figure=fig, config={"displayModeBar": False}), status

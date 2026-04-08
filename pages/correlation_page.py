@@ -147,6 +147,21 @@ def build_correlation_section(LBL, PANEL, C, FONT):
                         style={"width": "160px", "fontSize": "0.82rem"},
                     ),
                 ]),
+                html.Div([
+                    html.Div("Return Frequency", style={**LBL, "marginBottom": "0.3rem"},
+                             className="theme-label"),
+                    dcc.Dropdown(
+                        id="rolling-corr-freq",
+                        options=[
+                            {"label": "Daily",   "value": "daily"},
+                            {"label": "Weekly",  "value": "weekly"},
+                            {"label": "Monthly", "value": "monthly"},
+                        ],
+                        value="daily",
+                        clearable=False,
+                        style={"width": "140px", "fontSize": "0.82rem"},
+                    ),
+                ]),
                 html.Button("Chart", id="rolling-corr-run", n_clicks=0, style={
                     "backgroundColor": C["accent"], "color": "#000", "border": "none",
                     "borderRadius": "8px", "padding": "0.55rem 1.5rem",
