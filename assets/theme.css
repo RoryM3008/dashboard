@@ -122,3 +122,82 @@
 #theme-toggle:hover {
     transform: scale(1.15);
 }
+
+/* Spread page Bloomberg toolbar dropdowns */
+#root-container .spread-toolbar-dropdown .Select-control,
+#root-container.dark-mode .spread-toolbar-dropdown .Select-control,
+#root-container.light-mode .spread-toolbar-dropdown .Select-control {
+    background-color: #0f1114 !important;
+    border: 1px solid #3d434f !important;
+    border-radius: 4px !important;
+    min-height: 34px !important;
+    box-shadow: none !important;
+}
+
+#root-container .spread-toolbar-dropdown .Select-input,
+#root-container .spread-toolbar-dropdown .Select-placeholder,
+#root-container .spread-toolbar-dropdown .Select-value-label,
+#root-container .spread-toolbar-dropdown .Select--single > .Select-control .Select-value,
+#root-container.dark-mode .spread-toolbar-dropdown .Select-input,
+#root-container.dark-mode .spread-toolbar-dropdown .Select-placeholder,
+#root-container.dark-mode .spread-toolbar-dropdown .Select-value-label,
+#root-container.dark-mode .spread-toolbar-dropdown .Select--single > .Select-control .Select-value,
+#root-container.light-mode .spread-toolbar-dropdown .Select-input,
+#root-container.light-mode .spread-toolbar-dropdown .Select-placeholder,
+#root-container.light-mode .spread-toolbar-dropdown .Select-value-label,
+#root-container.light-mode .spread-toolbar-dropdown .Select--single > .Select-control .Select-value {
+    color: #f1f3f6 !important;
+    font-size: 0.8rem !important;
+}
+
+#root-container .spread-toolbar-dropdown .Select-placeholder,
+#root-container.dark-mode .spread-toolbar-dropdown .Select-placeholder,
+#root-container.light-mode .spread-toolbar-dropdown .Select-placeholder {
+    color: #9ba6b2 !important;
+}
+
+#root-container .spread-toolbar-dropdown .Select-arrow-zone .Select-arrow,
+#root-container.dark-mode .spread-toolbar-dropdown .Select-arrow-zone .Select-arrow,
+#root-container.light-mode .spread-toolbar-dropdown .Select-arrow-zone .Select-arrow {
+    border-top-color: #d8dee6 !important;
+}
+
+#root-container .spread-toolbar-dropdown .Select-menu-outer,
+#root-container .spread-toolbar-dropdown .Select-menu,
+#root-container.dark-mode .spread-toolbar-dropdown .Select-menu-outer,
+#root-container.dark-mode .spread-toolbar-dropdown .Select-menu,
+#root-container.light-mode .spread-toolbar-dropdown .Select-menu-outer,
+#root-container.light-mode .spread-toolbar-dropdown .Select-menu {
+    background-color: #0f1114 !important;
+    border: 1px solid #3d434f !important;
+    color: #f1f3f6 !important;
+}
+
+#root-container .spread-toolbar-dropdown .Select-option,
+#root-container.dark-mode .spread-toolbar-dropdown .Select-option,
+#root-container.light-mode .spread-toolbar-dropdown .Select-option {
+    background-color: #0f1114 !important;
+    color: #f1f3f6 !important;
+}
+
+#root-container .spread-toolbar-dropdown .Select-option.is-focused,
+#root-container.dark-mode .spread-toolbar-dropdown .Select-option.is-focused,
+#root-container.light-mode .spread-toolbar-dropdown .Select-option.is-focused {
+    background-color: #1a2129 !important;
+}
+
+#root-container .spread-toolbar-dropdown .Select-option.is-selected,
+#root-container.dark-mode .spread-toolbar-dropdown .Select-option.is-selected,
+#root-container.light-mode .spread-toolbar-dropdown .Select-option.is-selected {
+    background-color: #182631 !important;
+    color: #ffd24d !important;
+}
+
+#root-container .spread-toolbar-dropdown .Select-value,
+#root-container.dark-mode .spread-toolbar-dropdown .Select-value,
+#root-container.light-mode .spread-toolbar-dropdown .Select-value,
+#root-container .spread-toolbar-dropdown .Select-value-label,
+#root-container.dark-mode .spread-toolbar-dropdown .Select-value-label,
+#root-container.light-mode .spread-toolbar-dropdown .Select-value-label {
+    background-color: #0f1114 !important;
+}

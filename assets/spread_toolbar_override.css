@@ -1,0 +1,103 @@
+/* Fresh override file for Bloomberg-style spread toolbar dropdowns. */
+
+#spread-type,
+#spread-history,
+#spread-freq {
+    background: transparent !important;
+}
+
+#spread-type .Select-control,
+#spread-history .Select-control,
+#spread-freq .Select-control,
+#spread-type .select__control,
+#spread-history .select__control,
+#spread-freq .select__control {
+    background: #0f1114 !important;
+    background-color: #0f1114 !important;
+    border: 1px solid #3d434f !important;
+    border-radius: 4px !important;
+    box-shadow: none !important;
+    min-height: 34px !important;
+}
+
+#spread-type .Select-value,
+#spread-history .Select-value,
+#spread-freq .Select-value,
+#spread-type .Select-value-label,
+#spread-history .Select-value-label,
+#spread-freq .Select-value-label,
+#spread-type .Select-placeholder,
+#spread-history .Select-placeholder,
+#spread-freq .Select-placeholder,
+#spread-type .Select-input,
+#spread-history .Select-input,
+#spread-freq .Select-input,
+#spread-type .select__single-value,
+#spread-history .select__single-value,
+#spread-freq .select__single-value,
+#spread-type .select__placeholder,
+#spread-history .select__placeholder,
+#spread-freq .select__placeholder,
+#spread-type input,
+#spread-history input,
+#spread-freq input {
+    background: #0f1114 !important;
+    background-color: #0f1114 !important;
+    color: #f1f3f6 !important;
+}
+
+#spread-type .Select-arrow,
+#spread-history .Select-arrow,
+#spread-freq .Select-arrow {
+    border-top-color: #d8dee6 !important;
+}
+
+#spread-type .Select-menu-outer,
+#spread-history .Select-menu-outer,
+#spread-freq .Select-menu-outer,
+#spread-type .Select-menu,
+#spread-history .Select-menu,
+#spread-freq .Select-menu,
+#spread-type .select__menu,
+#spread-history .select__menu,
+#spread-freq .select__menu,
+#spread-type .select__menu-list,
+#spread-history .select__menu-list,
+#spread-freq .select__menu-list {
+    background: #0f1114 !important;
+    background-color: #0f1114 !important;
+    border: 1px solid #3d434f !important;
+    color: #f1f3f6 !important;
+}
+
+#spread-type .Select-option,
+#spread-history .Select-option,
+#spread-freq .Select-option,
+#spread-type .select__option,
+#spread-history .select__option,
+#spread-freq .select__option {
+    background: #0f1114 !important;
+    background-color: #0f1114 !important;
+    color: #f1f3f6 !important;
+}
+
+#spread-type .Select-option.is-focused,
+#spread-history .Select-option.is-focused,
+#spread-freq .Select-option.is-focused,
+#spread-type .select__option--is-focused,
+#spread-history .select__option--is-focused,
+#spread-freq .select__option--is-focused {
+    background: #1a2129 !important;
+    background-color: #1a2129 !important;
+}
+
+#spread-type .Select-option.is-selected,
+#spread-history .Select-option.is-selected,
+#spread-freq .Select-option.is-selected,
+#spread-type .select__option--is-selected,
+#spread-history .select__option--is-selected,
+#spread-freq .select__option--is-selected {
+    background: #182631 !important;
+    background-color: #182631 !important;
+    color: #ffd24d !important;
+}

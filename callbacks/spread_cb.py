@@ -1,13 +1,12 @@
 """Callbacks — Spread Analysis (Bloomberg HS-style pairs / relative-value)."""
 
-import dash
 from dash import Input, Output, State, html, dcc, no_update
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 import yfinance as yf
 
-from theme import get_theme, _panel
+from theme import get_theme
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -28,24 +27,45 @@ def _download(ticker: str, period: str, freq: str) -> pd.Series:
     return s
 
 
-def _chart_layout(title, c, font, yaxis_title="", y2=False):
+def _chart_layout(title, c, font, yaxis_title="", y2=False, height=300):
+    bloom_grid = "rgba(150, 176, 195, 0.38)"
+    bloom_text = "#dce3ea"
     layout = dict(
-        template="plotly_dark" if c["bg"] == "#0b0e11" else "plotly_white",
+        template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(family=font, size=11, color=c["text"]),
-        title=dict(text=title, font=dict(size=13)),
-        margin=dict(l=50, r=50, t=40, b=35),
-        height=340,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        plot_bgcolor="#162431",
+        font=dict(family=font, size=11, color=bloom_text),
+        title=dict(text=title, font=dict(size=13, color="#f5c14a"), x=0.01, xanchor="left"),
+        margin=dict(l=44, r=40, t=44, b=30),
+        height=height,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=0.99,
+                    bgcolor="rgba(7,12,18,0.72)", bordercolor="#2c3a46", borderwidth=1),
         hovermode="x unified",
-        xaxis=dict(gridcolor=c["border"], zeroline=False),
-        yaxis=dict(title=yaxis_title, gridcolor=c["border"], zeroline=False),
+        xaxis=dict(
+            gridcolor=bloom_grid,
+            griddash="dot",
+            zeroline=False,
+            tickfont=dict(color=bloom_text),
+            linecolor="#415262",
+            mirror=True,
+        ),
+        yaxis=dict(
+            title=yaxis_title,
+            gridcolor=bloom_grid,
+            griddash="dot",
+            zeroline=False,
+            tickfont=dict(color=bloom_text),
+            linecolor="#415262",
+            mirror=True,
+        ),
     )
     if y2:
         layout["yaxis2"] = dict(
             overlaying="y", side="right", showgrid=False, zeroline=False,
             title="",
+            tickfont=dict(color=bloom_text),
+            linecolor="#415262",
+            mirror=True,
         )
     return go.Layout(**layout)
 
@@ -139,13 +159,36 @@ def register_callbacks(app):
 
         # ── 1) Price overlay chart ───────────────────────────────────────
         fig_px = go.Figure(layout=_chart_layout(
-            f"{leg_a} vs {leg_b} — Price Overlay", c, font, yaxis_title=leg_a, y2=True))
+            f"{leg_a} vs {leg_b} — Price Overlay", c, font, yaxis_title=leg_a, y2=True, height=340))
         fig_px.add_trace(go.Scatter(
             x=df.index, y=df["A"], name=leg_a, mode="lines",
-            line=dict(color=c.get("green", "#00e676"), width=1.4)))
+            line=dict(color="#d7dde3", width=1.4)))
         fig_px.add_trace(go.Scatter(
             x=df.index, y=df["B"], name=leg_b, mode="lines",
-            line=dict(color=c.get("red", "#ff5252"), width=1.4), yaxis="y2"))
+            line=dict(color="#f7a211", width=1.6), yaxis="y2"))
+        fig_px.update_layout(
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.03,
+                xanchor="right",
+                x=0.99,
+                bgcolor="rgba(7,12,18,0.72)",
+                bordercolor="#2c3a46",
+                borderwidth=1,
+            ),
+            margin=dict(l=44, r=40, t=48, b=30),
+        )
+
+        # Add quick read hi/low tags similar to Bloomberg overlays.
+        a_hi_idx = df["A"].idxmax()
+        a_lo_idx = df["A"].idxmin()
+        fig_px.add_annotation(x=a_hi_idx, y=df.loc[a_hi_idx, "A"], text=f"Hi: {df['A'].max():.2f}",
+                              font=dict(color="#d7dde3", size=10), showarrow=False,
+                              xanchor="left", yanchor="bottom", bgcolor="rgba(10,14,20,0.45)")
+        fig_px.add_annotation(x=a_lo_idx, y=df.loc[a_lo_idx, "A"], text=f"Low: {df['A'].min():.2f}",
+                              font=dict(color="#d7dde3", size=10), showarrow=False,
+                              xanchor="left", yanchor="top", bgcolor="rgba(10,14,20,0.45)")
 
         # ── 2) Spread time-series chart ──────────────────────────────────
         if stype == "zscore":
@@ -157,10 +200,26 @@ def register_callbacks(app):
             series_title = f"Spread: {spread_label}"
             y_title = "Spread"
 
-        fig_sp = go.Figure(layout=_chart_layout(series_title, c, font, yaxis_title=y_title))
+        fig_sp = go.Figure(layout=_chart_layout(series_title, c, font, yaxis_title=y_title, height=340))
         fig_sp.add_trace(go.Scatter(
             x=plot_series.index, y=plot_series, name="Spread", mode="lines",
-            line=dict(color=c.get("accent", "#f5c518"), width=1.5)))
+            line=dict(color="#d8b63e", width=1.7),
+            fill="tozeroy",
+            fillcolor="rgba(96, 170, 42, 0.55)"))
+        fig_sp.update_layout(
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.03,
+                xanchor="right",
+                x=0.99,
+                bgcolor="rgba(7,12,18,0.72)",
+                bordercolor="#2c3a46",
+                borderwidth=1,
+                groupclick="togglegroup",
+            ),
+            margin=dict(l=44, r=40, t=48, b=30),
+        )
 
         # Mean + ±1σ / ±2σ bands
         sp_mean_val = plot_series.mean()
@@ -172,8 +231,9 @@ def register_callbacks(app):
         fig_sp.add_trace(go.Scatter(
             x=list(plot_series.index) + list(plot_series.index[::-1]),
             y=[plus2] * len(plot_series) + [minus2] * len(plot_series),
-            fill="toself", fillcolor="rgba(245,197,24,0.12)",
-            line=dict(width=0), showlegend=True, name="±2σ",
+            fill="toself", fillcolor="rgba(245,197,24,0.09)",
+            line=dict(width=0), showlegend=False, name="Std Dev Bands",
+            legendgroup="stddev",
             hoverinfo="skip",
         ))
         # ±1σ band (darker amber — on top)
@@ -182,21 +242,40 @@ def register_callbacks(app):
         fig_sp.add_trace(go.Scatter(
             x=list(plot_series.index) + list(plot_series.index[::-1]),
             y=[plus1] * len(plot_series) + [minus1] * len(plot_series),
-            fill="toself", fillcolor="rgba(245,197,24,0.30)",
-            line=dict(width=0), showlegend=True, name="±1σ",
+            fill="toself", fillcolor="rgba(245,197,24,0.18)",
+            line=dict(width=0), showlegend=True, name="Std Dev Bands",
+            legendgroup="stddev",
             hoverinfo="skip",
         ))
-        # Mean line
-        fig_sp.add_hline(y=sp_mean_val, line_dash="dash", line_width=1.2,
-                         line_color=c.get("muted", "#999"),
-                         annotation_text="Mean", annotation_position="top left")
-        # ±1σ / ±2σ boundary lines (thin dotted)
+        fig_sp.add_trace(go.Scatter(
+            x=plot_series.index,
+            y=[sp_mean_val] * len(plot_series),
+            name="Mean",
+            mode="lines",
+            line=dict(color="#cfd5dd", width=1.1, dash="dash"),
+            hoverinfo="skip",
+        ))
         for lvl, lbl in [(plus1, "+1σ"), (minus1, "−1σ"),
-                          (plus2, "+2σ"), (minus2, "−2σ")]:
-            fig_sp.add_hline(y=lvl, line_dash="dot", line_width=0.7,
-                             line_color="rgba(245,197,24,0.45)",
-                             annotation_text=lbl, annotation_position="top left",
-                             annotation_font_size=9)
+                         (plus2, "+2σ"), (minus2, "−2σ")]:
+            fig_sp.add_trace(go.Scatter(
+                x=plot_series.index,
+                y=[lvl] * len(plot_series),
+                name=lbl,
+                mode="lines",
+                line=dict(color="rgba(245,197,24,0.42)", width=0.7, dash="dot"),
+                hoverinfo="skip",
+                showlegend=False,
+                legendgroup="stddev",
+            ))
+
+        sp_hi_idx = plot_series.idxmax()
+        sp_lo_idx = plot_series.idxmin()
+        fig_sp.add_annotation(x=sp_hi_idx, y=plot_series.max(), text=f"Hi: {plot_series.max():.2f}",
+                      font=dict(color="#f5c14a", size=10), showarrow=False,
+                      xanchor="left", yanchor="bottom")
+        fig_sp.add_annotation(x=sp_lo_idx, y=plot_series.min(), text=f"Low: {plot_series.min():.2f}",
+                      font=dict(color="#f5c14a", size=10), showarrow=False,
+                      xanchor="left", yanchor="top")
 
         # ── 3) Stats table ───────────────────────────────────────────────
         def _fmt(v, dp=4):
@@ -217,21 +296,24 @@ def register_callbacks(app):
             ("Observations",   str(len(spread))),
         ]
 
-        tbl_hdr = {"backgroundColor": c["panel"], "padding": "0.35rem 0.6rem",
-                    "borderBottom": f"1px solid {c['border']}", "fontWeight": "700",
-                    "fontSize": "0.75rem", "fontFamily": font, "color": c["text"]}
-        tbl_td  = {"padding": "0.3rem 0.6rem", "fontSize": "0.78rem",
-                    "fontFamily": font, "borderBottom": f"1px solid {c['border']}",
-                    "color": c["text"]}
+        tbl_hdr = {"backgroundColor": "#090c12", "padding": "0.28rem 0.4rem",
+                "borderBottom": "1px solid #2f3a47", "fontWeight": "700",
+                "fontSize": "0.72rem", "fontFamily": font, "color": "#f0f3f6"}
+        tbl_td_lbl = {"padding": "0.22rem 0.4rem", "fontSize": "0.78rem",
+                  "fontFamily": font, "borderBottom": "1px solid #24303d",
+                  "color": "#f0ad30"}
+        tbl_td_val = {"padding": "0.22rem 0.4rem", "fontSize": "0.78rem",
+                  "fontFamily": font, "borderBottom": "1px solid #24303d",
+                  "color": "#f2f5f8"}
 
         stat_table = html.Table([
             html.Thead(html.Tr([html.Th("Statistic", style=tbl_hdr),
                                 html.Th("Value", style=tbl_hdr)])),
             html.Tbody([
-                html.Tr([html.Td(lbl, style=tbl_td), html.Td(val, style=tbl_td)])
+                html.Tr([html.Td(lbl, style=tbl_td_lbl), html.Td(val, style=tbl_td_val)])
                 for lbl, val in rows
             ]),
-        ], style={"width": "100%", "borderCollapse": "collapse"})
+        ], style={"width": "100%", "borderCollapse": "collapse", "backgroundColor": "#05080d"})
 
         # ── 4) Histogram + Normal curve ────────────────────────────────
         clean = plot_series.dropna()
@@ -240,43 +322,79 @@ def register_callbacks(app):
         n_bins = max(40, min(100, int(np.sqrt(n_obs) * 2)))
 
         fig_hist = go.Figure(layout=_chart_layout(
-            "Spread Distribution", c, font, yaxis_title="Density"))
+            "", c, font, yaxis_title="Spread", height=370))
 
-        # Histogram normalised to density so it matches the bell curve scale
-        fig_hist.add_trace(go.Histogram(
-            x=clean, nbinsx=n_bins, name="Observed",
-            marker_color=c.get("accent", "#f5c518"), opacity=0.65,
-            histnorm="probability density",
+        hist_vals, bin_edges = np.histogram(clean, bins=n_bins)
+        y_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        bin_h = (bin_edges[1] - bin_edges[0]) if len(bin_edges) > 1 else 1.0
+
+        fig_hist.add_trace(go.Bar(
+            x=hist_vals,
+            y=y_centers,
+            orientation="h",
+            name="Observed",
+            marker_color="rgba(115, 203, 36, 0.78)",
+            marker_line=dict(color="rgba(55, 92, 24, 0.92)", width=0.2),
         ))
 
-        # Normal distribution bell curve overlay
-        x_range = np.linspace(clean.min(), clean.max(), 300)
-        normal_pdf = (1 / (sp_std_val * np.sqrt(2 * np.pi))) * \
-            np.exp(-0.5 * ((x_range - sp_mean_val) / sp_std_val) ** 2)
-        fig_hist.add_trace(go.Scatter(
-            x=x_range, y=normal_pdf, mode="lines", name="Normal",
-            line=dict(color="#ffffff", width=2, dash="solid"),
-        ))
+        # Normal distribution curve scaled to bar counts
+        if sp_std_val and sp_std_val > 0:
+            y_curve = np.linspace(clean.min(), clean.max(), 320)
+            normal_pdf = (1 / (sp_std_val * np.sqrt(2 * np.pi))) * \
+                np.exp(-0.5 * ((y_curve - sp_mean_val) / sp_std_val) ** 2)
+            scaled_counts = normal_pdf * len(clean) * bin_h
+            fig_hist.add_trace(go.Scatter(
+                x=scaled_counts,
+                y=y_curve,
+                mode="lines",
+                name="Normal",
+                line=dict(color="#e4a327", width=2.0, dash="solid"),
+            ))
 
         # Reference lines: mean, current, ±1σ, ±2σ
-        fig_hist.add_vline(x=sp_mean_val, line_dash="dash", line_width=1.2,
-                           line_color=c.get("muted", "#999"),
-                           annotation_text="Mean")
-        fig_hist.add_vline(x=plot_series.iloc[-1], line_dash="dot", line_width=1.5,
-                           line_color=c.get("green", "#00e676"),
-                           annotation_text="Current")
+        max_count = float(hist_vals.max()) if len(hist_vals) else 1.0
+        fig_hist.add_hline(y=sp_mean_val, line_dash="dash", line_width=1.1,
+                           line_color="#cfd5dd", annotation_text="Mean")
+        fig_hist.add_hline(y=plot_series.iloc[-1], line_dash="dot", line_width=1.3,
+                           line_color="#f0ad30", annotation_text="Current")
         for sigma, lbl in [(1, "±1σ"), (2, "±2σ")]:
-            fig_hist.add_vline(x=sp_mean_val + sigma * sp_std_val,
+            fig_hist.add_hline(y=sp_mean_val + sigma * sp_std_val,
                                line_dash="dot", line_width=0.7,
                                line_color="rgba(245,197,24,0.5)")
-            fig_hist.add_vline(x=sp_mean_val - sigma * sp_std_val,
+            fig_hist.add_hline(y=sp_mean_val - sigma * sp_std_val,
                                line_dash="dot", line_width=0.7,
                                line_color="rgba(245,197,24,0.5)",
                                annotation_text=lbl)
-        fig_hist.update_layout(height=320, barmode="overlay")
+
+        fig_hist.update_layout(
+            height=370,
+            barmode="overlay",
+            margin=dict(l=48, r=16, t=4, b=34),
+            xaxis=dict(
+                title="Count",
+                gridcolor="rgba(150, 176, 195, 0.24)",
+                griddash="dot",
+                zeroline=False,
+                range=[0, max_count * 1.2],
+                tickfont=dict(color="#dce3ea"),
+                linecolor="#415262",
+                mirror=True,
+            ),
+            yaxis=dict(
+                title="Spread",
+                gridcolor="rgba(150, 176, 195, 0.24)",
+                griddash="dot",
+                zeroline=False,
+                tickfont=dict(color="#dce3ea"),
+                linecolor="#415262",
+                mirror=True,
+            ),
+            legend=dict(orientation="h", yanchor="top", y=0.97, xanchor="left", x=0.02,
+                        bgcolor="rgba(0,0,0,0)", borderwidth=0),
+        )
 
         # ── Wrap in dcc.Graph ────────────────────────────────────────────
-        graph_style = {"borderRadius": "10px", "overflow": "hidden"}
+        graph_style = {"borderRadius": "4px", "overflow": "hidden", "border": "1px solid #2d3a46", "width": "100%"}
         price_chart = dcc.Graph(figure=fig_px, config={"displayModeBar": False},
                                 style=graph_style)
         series_chart = dcc.Graph(figure=fig_sp, config={"displayModeBar": False},
