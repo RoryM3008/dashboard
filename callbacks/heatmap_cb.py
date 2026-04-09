@@ -34,18 +34,23 @@ def register_callbacks(app):
             if txns.empty:
                 return [], "No transactions found."
 
-            hdf, _ = compute_holdings(txns)
+            hdf, summary = compute_holdings(txns)
             active = hdf[hdf["shares"] > 0].copy()
             if active.empty:
                 return [], "No active holdings to map."
 
+            # equity-only weight (% of securities only, excl. cash)
+            total_mv = summary.get("total_mv", 0) or 1
+
             rows = []
             for _, r in active.iterrows():
                 yf_t, _ = _resolve_ticker(r["ticker"])
+                mv = float(r.get("market_value", 0) or 0)
                 rows.append({
                     "ticker": r["ticker"],
                     "yf_ticker": yf_t,
                     "weight_pct": float(r.get("weight_pct", 0) or 0),
+                    "weight_eq": round(mv / total_mv * 100, 1),
                 })
 
             return rows, f"Loaded {len(rows)} holdings from Portfolio."
@@ -125,6 +130,7 @@ def register_callbacks(app):
                 plot_rows.append({
                     "label": r["ticker"],
                     "weight": max(float(r["weight_pct"]), 0.05),
+                    "weight_eq": float(r.get("weight_eq", 0)),
                     "ret_pct": round(float(returns[yft]), 2),
                 })
 
@@ -148,9 +154,9 @@ def register_callbacks(app):
                 "line": {"color": c["border"], "width": 1},
                 "colorbar": {"title": "% Move", "tickformat": ".2f"},
             },
-            texttemplate="<b>%{label}</b><br>%{customdata[0]:.1f}%<br>%{customdata[1]:+.2f}%",
-            customdata=plot_df[["weight", "ret_pct"]].values,
-            hovertemplate="<b>%{label}</b><br>Weight: %{customdata[0]:.2f}%<br>Move: %{customdata[1]:+.2f}%<extra></extra>",
+            texttemplate="<b>%{label}</b><br>Eq: %{customdata[0]:.1f}%  Tot: %{customdata[1]:.1f}%<br>%{customdata[2]:+.2f}%",
+            customdata=plot_df[["weight_eq", "weight", "ret_pct"]].values,
+            hovertemplate="<b>%{label}</b><br>Equity Wt: %{customdata[0]:.2f}%<br>Total Wt: %{customdata[1]:.2f}%<br>Move: %{customdata[2]:+.2f}%<extra></extra>",
         ))
 
         fig.update_layout(

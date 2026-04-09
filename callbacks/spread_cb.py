@@ -1,20 +1,29 @@
-"""Callbacks — Spread Analysis (Bloomberg HS-style pairs / relative-value)."""
+"""Callbacks — Spread Analysis (Bloomberg HS <GO> replica).
 
+Two-column output:
+  LEFT:  Price overlay (top) + Spread time-series (bottom)
+  RIGHT: Stats table   (top) + Horizontal histogram  (bottom)
+"""
+
+import dash
 from dash import Input, Output, State, html, dcc, no_update
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 import yfinance as yf
 
-from theme import get_theme
+from theme import get_theme, _panel
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 _RESAMPLE = {"daily": None, "weekly": "W-FRI", "monthly": "ME"}
+_BG = "#1a1a2e"          # Bloomberg navy
+_GRID = "rgba(255,255,255,0.07)"
+_AMBER = "#ff8c00"
+_AMBER_LT = "rgba(255,140,0,{a})"
 
 
 def _download(ticker: str, period: str, freq: str) -> pd.Series:
-    """Download adjusted close, optionally resample."""
     tk = yf.Ticker(ticker.strip().upper())
     df = tk.history(period=period, auto_adjust=True)
     if df.empty:
@@ -27,47 +36,24 @@ def _download(ticker: str, period: str, freq: str) -> pd.Series:
     return s
 
 
-def _chart_layout(title, c, font, yaxis_title="", y2=False, height=300):
-    bloom_grid = "rgba(150, 176, 195, 0.38)"
-    bloom_text = "#dce3ea"
-    layout = dict(
+def _base_layout(c, font, height, margin=None):
+    """Minimal Bloomberg-style chart layout."""
+    m = margin or dict(l=48, r=12, t=24, b=24)
+    return dict(
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="#162431",
-        font=dict(family=font, size=11, color=bloom_text),
-        title=dict(text=title, font=dict(size=13, color="#f5c14a"), x=0.01, xanchor="left"),
-        margin=dict(l=44, r=40, t=44, b=30),
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family=font, size=10, color=c["text"]),
+        margin=m,
         height=height,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=0.99,
-                    bgcolor="rgba(7,12,18,0.72)", bordercolor="#2c3a46", borderwidth=1),
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left",
+                    x=0, font=dict(size=9)),
         hovermode="x unified",
-        xaxis=dict(
-            gridcolor=bloom_grid,
-            griddash="dot",
-            zeroline=False,
-            tickfont=dict(color=bloom_text),
-            linecolor="#415262",
-            mirror=True,
-        ),
-        yaxis=dict(
-            title=yaxis_title,
-            gridcolor=bloom_grid,
-            griddash="dot",
-            zeroline=False,
-            tickfont=dict(color=bloom_text),
-            linecolor="#415262",
-            mirror=True,
-        ),
+        xaxis=dict(gridcolor=_GRID, zeroline=False, showgrid=True,
+                   tickfont=dict(size=9)),
+        yaxis=dict(gridcolor=_GRID, zeroline=False, showgrid=True,
+                   tickfont=dict(size=9)),
     )
-    if y2:
-        layout["yaxis2"] = dict(
-            overlaying="y", side="right", showgrid=False, zeroline=False,
-            title="",
-            tickfont=dict(color=bloom_text),
-            linecolor="#415262",
-            mirror=True,
-        )
-    return go.Layout(**layout)
 
 
 # ── register_callbacks ───────────────────────────────────────────────────────
@@ -99,310 +85,257 @@ def register_callbacks(app):
         c = get_theme(theme_mode or "dark")
         font = "Nunito Sans, sans-serif"
 
-        # ── Validate inputs ──────────────────────────────────────────────
+        # ── validate ─────────────────────────────────────────────────────
         if not leg_a or not leg_b:
-            msg = "⚠️  Enter both Leg A and Leg B tickers."
-            return no_update, no_update, no_update, no_update, msg
+            return no_update, no_update, no_update, no_update, \
+                "⚠  Enter both Asset A and Asset B tickers."
         mult_a = float(mult_a or 1)
         mult_b = float(mult_b or 1)
         z_win  = int(z_win or 60)
+        leg_a  = leg_a.strip().upper()
+        leg_b  = leg_b.strip().upper()
 
-        leg_a = leg_a.strip().upper()
-        leg_b = leg_b.strip().upper()
-
-        # ── Download prices ──────────────────────────────────────────────
+        # ── download + align ─────────────────────────────────────────────
         try:
             pa = _download(leg_a, period, freq)
             pb = _download(leg_b, period, freq)
         except Exception as e:
-            return no_update, no_update, no_update, no_update, f"⚠️  Download error: {e}"
+            return no_update, no_update, no_update, no_update, f"⚠  {e}"
 
         if pa.empty or pb.empty:
             return no_update, no_update, no_update, no_update, \
-                "⚠️  No data returned for one or both tickers."
+                "⚠  No data for one or both tickers."
 
-        # Align
         df = pd.DataFrame({"A": pa, "B": pb}).dropna()
         if len(df) < 10:
             return no_update, no_update, no_update, no_update, \
-                f"⚠️  Only {len(df)} overlapping observations — need ≥ 10."
+                f"⚠  Only {len(df)} overlapping obs — need ≥ 10."
 
-        # ── Compute spread series ────────────────────────────────────────
+        # ── compute spread ───────────────────────────────────────────────
         a_w = df["A"] * mult_a
         b_w = df["B"] * mult_b
 
         if stype == "ratio":
             spread = a_w / b_w
-            spread_label = f"{mult_a}×{leg_a} / {mult_b}×{leg_b}"
+            sp_lbl = f"{leg_a}/{leg_b}"
         else:
             spread = a_w - b_w
-            spread_label = f"{mult_a}×{leg_a} − {mult_b}×{leg_b}"
+            sp_lbl = f"{leg_a}−{leg_b}"
 
-        spread.name = "spread"
+        # rolling z
+        rm = spread.rolling(z_win, min_periods=max(z_win // 2, 5)).mean()
+        rs = spread.rolling(z_win, min_periods=max(z_win // 2, 5)).std()
+        z_series = (spread - rm) / rs
 
-        # Rolling Z-score series
-        roll_mean = spread.rolling(z_win, min_periods=max(z_win // 2, 5)).mean()
-        roll_std  = spread.rolling(z_win, min_periods=max(z_win // 2, 5)).std()
-        z_series  = (spread - roll_mean) / roll_std
-
-        # Full-sample stats
-        s_last = spread.iloc[-1]
-        s_mean = spread.mean()
+        # full-sample stats
+        s_last   = spread.iloc[-1]
+        s_mean   = spread.mean()
         s_median = spread.median()
-        s_std  = spread.std()
-        s_z    = (s_last - s_mean) / s_std if s_std else 0
-        s_pct  = (spread < s_last).mean() * 100
-        s_hi   = spread.max()
-        s_lo   = spread.min()
-        s_hi_dt = spread.idxmax().strftime("%Y-%m-%d")
-        s_lo_dt = spread.idxmin().strftime("%Y-%m-%d")
+        s_std    = spread.std()
+        s_z      = (s_last - s_mean) / s_std if s_std else 0.0
+        s_pct    = (spread < s_last).mean() * 100
+        s_hi     = spread.max()
+        s_lo     = spread.min()
+        s_hi_dt  = spread.idxmax().strftime("%Y-%m-%d")
+        s_lo_dt  = spread.idxmin().strftime("%Y-%m-%d")
 
-        # ── 1) Price overlay chart ───────────────────────────────────────
-        fig_px = go.Figure(layout=_chart_layout(
-            f"{leg_a} vs {leg_b} — Price Overlay", c, font, yaxis_title=leg_a, y2=True, height=340))
+        # chart heights — split viewport (minus control bar ~90px)
+        ch_h = "calc((100vh - 290px) / 2)"
+        px_h = 280   # plotly needs a numeric fallback
+        gcfg = {"displayModeBar": False}
+
+        # ─────────────────────────────────────────────────────────────────
+        # 1) PRICE OVERLAY (top-left)
+        # ─────────────────────────────────────────────────────────────────
+        fig_px = go.Figure(layout=_base_layout(c, font, px_h))
+        fig_px.update_layout(
+            yaxis=dict(title=leg_a, side="left", gridcolor=_GRID),
+            yaxis2=dict(overlaying="y", side="right", showgrid=False,
+                        zeroline=False, tickfont=dict(size=9)),
+        )
         fig_px.add_trace(go.Scatter(
             x=df.index, y=df["A"], name=leg_a, mode="lines",
-            line=dict(color="#d7dde3", width=1.4)))
+            line=dict(color="#00e676", width=1.3),
+        ))
         fig_px.add_trace(go.Scatter(
             x=df.index, y=df["B"], name=leg_b, mode="lines",
-            line=dict(color="#f7a211", width=1.6), yaxis="y2"))
-        fig_px.update_layout(
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.03,
-                xanchor="right",
-                x=0.99,
-                bgcolor="rgba(7,12,18,0.72)",
-                bordercolor="#2c3a46",
-                borderwidth=1,
-            ),
-            margin=dict(l=44, r=40, t=48, b=30),
-        )
+            line=dict(color="#ff5252", width=1.3), yaxis="y2",
+        ))
+        # last-price annotations at right edge
+        for val, clr, nm, ya in [
+            (df["A"].iloc[-1], "#00e676", leg_a, "y"),
+            (df["B"].iloc[-1], "#ff5252", leg_b, "y2"),
+        ]:
+            fig_px.add_annotation(
+                x=df.index[-1], y=val, yref=ya,
+                text=f" {val:,.2f}", showarrow=False,
+                font=dict(color=clr, size=10, family="Consolas"),
+                xanchor="left", bgcolor="rgba(0,0,0,0.6)",
+            )
 
-        # Add quick read hi/low tags similar to Bloomberg overlays.
-        a_hi_idx = df["A"].idxmax()
-        a_lo_idx = df["A"].idxmin()
-        fig_px.add_annotation(x=a_hi_idx, y=df.loc[a_hi_idx, "A"], text=f"Hi: {df['A'].max():.2f}",
-                              font=dict(color="#d7dde3", size=10), showarrow=False,
-                              xanchor="left", yanchor="bottom", bgcolor="rgba(10,14,20,0.45)")
-        fig_px.add_annotation(x=a_lo_idx, y=df.loc[a_lo_idx, "A"], text=f"Low: {df['A'].min():.2f}",
-                              font=dict(color="#d7dde3", size=10), showarrow=False,
-                              xanchor="left", yanchor="top", bgcolor="rgba(10,14,20,0.45)")
-
-        # ── 2) Spread time-series chart ──────────────────────────────────
+        # ─────────────────────────────────────────────────────────────────
+        # 2) SPREAD TIME SERIES (bottom-left)
+        # ─────────────────────────────────────────────────────────────────
         if stype == "zscore":
-            plot_series = z_series.dropna()
-            series_title = f"Rolling Z-Score ({z_win}-period) of {spread_label}"
-            y_title = "Z-Score"
+            ps = z_series.dropna()
+            ytitle = "Z-Score"
         else:
-            plot_series = spread
-            series_title = f"Spread: {spread_label}"
-            y_title = "Spread"
+            ps = spread
+            ytitle = "Spread"
 
-        fig_sp = go.Figure(layout=_chart_layout(series_title, c, font, yaxis_title=y_title, height=340))
+        sp_m = ps.mean()
+        sp_s = ps.std()
+
+        fig_sp = go.Figure(layout=_base_layout(c, font, px_h))
+        fig_sp.update_layout(yaxis_title=ytitle)
+
+        idx_f = list(ps.index)
+        idx_r = list(ps.index[::-1])
+
+        # ±2σ band (lighter green — drawn first, sits behind)
         fig_sp.add_trace(go.Scatter(
-            x=plot_series.index, y=plot_series, name="Spread", mode="lines",
-            line=dict(color="#d8b63e", width=1.7),
-            fill="tozeroy",
-            fillcolor="rgba(96, 170, 42, 0.55)"))
-        fig_sp.update_layout(
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.03,
-                xanchor="right",
-                x=0.99,
-                bgcolor="rgba(7,12,18,0.72)",
-                bordercolor="#2c3a46",
-                borderwidth=1,
-                groupclick="togglegroup",
-            ),
-            margin=dict(l=44, r=40, t=48, b=30),
+            x=idx_f + idx_r,
+            y=[sp_m + 2 * sp_s] * len(ps) + [sp_m - 2 * sp_s] * len(ps),
+            fill="toself", fillcolor="rgba(255,140,0,0.10)",
+            line=dict(width=0), showlegend=True, name="±2σ",
+            hoverinfo="skip",
+        ))
+        # ±1σ band (darker green — on top)
+        fig_sp.add_trace(go.Scatter(
+            x=idx_f + idx_r,
+            y=[sp_m + sp_s] * len(ps) + [sp_m - sp_s] * len(ps),
+            fill="toself", fillcolor="rgba(255,140,0,0.25)",
+            line=dict(width=0), showlegend=True, name="±1σ",
+            hoverinfo="skip",
+        ))
+        # spread area (green fill, yellow line — 2-D area chart)
+        fig_sp.add_trace(go.Scatter(
+            x=ps.index, y=ps, name=sp_lbl, mode="lines",
+            line=dict(color="#ffeb3b", width=1.5),
+            fill="tozeroy", fillcolor="rgba(0,230,118,0.25)",
+        ))
+        # mean line
+        fig_sp.add_hline(y=sp_m, line_dash="dash", line_width=1,
+                         line_color="rgba(255,255,255,0.45)",
+                         annotation_text="Mean", annotation_position="top left",
+                         annotation_font=dict(size=9, color="#aaa"))
+        # ±1σ / ±2σ boundary labels
+        for v, lbl in [(sp_m + sp_s, "+1σ"), (sp_m - sp_s, "−1σ"),
+                        (sp_m + 2 * sp_s, "+2σ"), (sp_m - 2 * sp_s, "−2σ")]:
+            fig_sp.add_hline(y=v, line_dash="dot", line_width=0.6,
+                             line_color="rgba(255,140,0,0.40)",
+                             annotation_text=lbl,
+                             annotation_position="top left",
+                             annotation_font=dict(size=8, color="#888"))
+        # annotate latest value at right edge
+        fig_sp.add_annotation(
+            x=ps.index[-1], y=ps.iloc[-1],
+            text=f"  {ps.iloc[-1]:,.4f}", showarrow=False,
+            font=dict(color="#ffeb3b", size=10, family="Consolas"),
+            xanchor="left", bgcolor="rgba(0,0,0,0.6)",
         )
 
-        # Mean + ±1σ / ±2σ bands
-        sp_mean_val = plot_series.mean()
-        sp_std_val  = plot_series.std()
-
-        # ±2σ band (light amber — drawn first so it sits behind)
-        plus2  = sp_mean_val + 2 * sp_std_val
-        minus2 = sp_mean_val - 2 * sp_std_val
-        fig_sp.add_trace(go.Scatter(
-            x=list(plot_series.index) + list(plot_series.index[::-1]),
-            y=[plus2] * len(plot_series) + [minus2] * len(plot_series),
-            fill="toself", fillcolor="rgba(245,197,24,0.09)",
-            line=dict(width=0), showlegend=False, name="Std Dev Bands",
-            legendgroup="stddev",
-            hoverinfo="skip",
-        ))
-        # ±1σ band (darker amber — on top)
-        plus1  = sp_mean_val + sp_std_val
-        minus1 = sp_mean_val - sp_std_val
-        fig_sp.add_trace(go.Scatter(
-            x=list(plot_series.index) + list(plot_series.index[::-1]),
-            y=[plus1] * len(plot_series) + [minus1] * len(plot_series),
-            fill="toself", fillcolor="rgba(245,197,24,0.18)",
-            line=dict(width=0), showlegend=True, name="Std Dev Bands",
-            legendgroup="stddev",
-            hoverinfo="skip",
-        ))
-        fig_sp.add_trace(go.Scatter(
-            x=plot_series.index,
-            y=[sp_mean_val] * len(plot_series),
-            name="Mean",
-            mode="lines",
-            line=dict(color="#cfd5dd", width=1.1, dash="dash"),
-            hoverinfo="skip",
-        ))
-        for lvl, lbl in [(plus1, "+1σ"), (minus1, "−1σ"),
-                         (plus2, "+2σ"), (minus2, "−2σ")]:
-            fig_sp.add_trace(go.Scatter(
-                x=plot_series.index,
-                y=[lvl] * len(plot_series),
-                name=lbl,
-                mode="lines",
-                line=dict(color="rgba(245,197,24,0.42)", width=0.7, dash="dot"),
-                hoverinfo="skip",
-                showlegend=False,
-                legendgroup="stddev",
-            ))
-
-        sp_hi_idx = plot_series.idxmax()
-        sp_lo_idx = plot_series.idxmin()
-        fig_sp.add_annotation(x=sp_hi_idx, y=plot_series.max(), text=f"Hi: {plot_series.max():.2f}",
-                      font=dict(color="#f5c14a", size=10), showarrow=False,
-                      xanchor="left", yanchor="bottom")
-        fig_sp.add_annotation(x=sp_lo_idx, y=plot_series.min(), text=f"Low: {plot_series.min():.2f}",
-                      font=dict(color="#f5c14a", size=10), showarrow=False,
-                      xanchor="left", yanchor="top")
-
-        # ── 3) Stats table ───────────────────────────────────────────────
-        def _fmt(v, dp=4):
+        # ─────────────────────────────────────────────────────────────────
+        # 3) STATS TABLE (top-right)
+        # ─────────────────────────────────────────────────────────────────
+        def _f(v, dp=4):
             return f"{v:,.{dp}f}"
 
-        z_colour = c.get("red", "#ff5252") if abs(s_z) > 2 else (
-            c.get("accent", "#f5c518") if abs(s_z) > 1 else c.get("green", "#00e676"))
+        z_clr = "#ff5252" if abs(s_z) > 2 else (
+            _AMBER if abs(s_z) > 1 else "#00e676")
 
         rows = [
-            ("Last",           _fmt(s_last)),
-            ("Mean",           _fmt(s_mean)),
-            ("Median",         _fmt(s_median)),
-            ("Std Dev",        _fmt(s_std)),
-            ("Z-Score",        html.Span(_fmt(s_z, 2), style={"color": z_colour, "fontWeight": "700"})),
-            ("Percentile",     f"{s_pct:.1f} %"),
-            ("High",           f"{_fmt(s_hi)}  ({s_hi_dt})"),
-            ("Low",            f"{_fmt(s_lo)}  ({s_lo_dt})"),
-            ("Observations",   str(len(spread))),
+            ("Last",        _f(s_last)),
+            ("Mean",        _f(s_mean)),
+            ("Median",      _f(s_median)),
+            ("Std Dev",     _f(s_std)),
+            ("Z-Score",     html.Span(_f(s_z, 2),
+                                      style={"color": z_clr, "fontWeight": "700"})),
+            ("Percentile",  f"{s_pct:.1f}%"),
+            ("High",        html.Span([_f(s_hi), html.Br(),
+                                       html.Span(s_hi_dt, style={"fontSize": "0.65rem",
+                                                                   "color": "#888"})])),
+            ("Low",         html.Span([_f(s_lo), html.Br(),
+                                       html.Span(s_lo_dt, style={"fontSize": "0.65rem",
+                                                                   "color": "#888"})])),
+            ("Obs",         str(len(spread))),
         ]
 
-        tbl_hdr = {"backgroundColor": "#090c12", "padding": "0.28rem 0.4rem",
-                "borderBottom": "1px solid #2f3a47", "fontWeight": "700",
-                "fontSize": "0.72rem", "fontFamily": font, "color": "#f0f3f6"}
-        tbl_td_lbl = {"padding": "0.22rem 0.4rem", "fontSize": "0.78rem",
-                  "fontFamily": font, "borderBottom": "1px solid #24303d",
-                  "color": "#f0ad30"}
-        tbl_td_val = {"padding": "0.22rem 0.4rem", "fontSize": "0.78rem",
-                  "fontFamily": font, "borderBottom": "1px solid #24303d",
-                  "color": "#f2f5f8"}
+        td_s = {"padding": "0.25rem 0.45rem", "fontSize": "0.74rem",
+                "fontFamily": font, "borderBottom": f"1px solid {c['border']}",
+                "color": c["text"]}
+        th_s = {**td_s, "fontWeight": "700", "fontSize": "0.68rem",
+                "color": _AMBER, "letterSpacing": "0.04em"}
 
-        stat_table = html.Table([
-            html.Thead(html.Tr([html.Th("Statistic", style=tbl_hdr),
-                                html.Th("Value", style=tbl_hdr)])),
-            html.Tbody([
-                html.Tr([html.Td(lbl, style=tbl_td_lbl), html.Td(val, style=tbl_td_val)])
-                for lbl, val in rows
-            ]),
-        ], style={"width": "100%", "borderCollapse": "collapse", "backgroundColor": "#05080d"})
+        stat_table = html.Div([
+            html.Div(f"SPREAD STATISTICS — {sp_lbl}", style={
+                "color": _AMBER, "fontSize": "0.7rem", "fontWeight": "700",
+                "fontFamily": "Consolas, monospace", "padding": "0.4rem 0.45rem 0.2rem",
+                "letterSpacing": "0.04em",
+            }),
+            html.Table([
+                html.Thead(html.Tr([
+                    html.Th("Metric", style=th_s), html.Th("Value", style=th_s),
+                ])),
+                html.Tbody([
+                    html.Tr([
+                        html.Td(lbl, style={**td_s, "color": "#aaa"}),
+                        html.Td(val, style=td_s),
+                    ]) for lbl, val in rows
+                ]),
+            ], style={"width": "100%", "borderCollapse": "collapse"}),
+        ])
 
-        # ── 4) Histogram + Normal curve ────────────────────────────────
-        clean = plot_series.dropna()
-        n_obs = len(clean)
-        # Use Freedman-Diaconis or ~80 bins for smoothness
-        n_bins = max(40, min(100, int(np.sqrt(n_obs) * 2)))
+        # ─────────────────────────────────────────────────────────────────
+        # 4) HORIZONTAL HISTOGRAM (bottom-right)
+        # ─────────────────────────────────────────────────────────────────
+        clean = ps.dropna()
+        n_bins = max(30, min(80, int(np.sqrt(len(clean)) * 1.8)))
 
-        fig_hist = go.Figure(layout=_chart_layout(
-            "", c, font, yaxis_title="Spread", height=370))
-
-        hist_vals, bin_edges = np.histogram(clean, bins=n_bins)
-        y_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-        bin_h = (bin_edges[1] - bin_edges[0]) if len(bin_edges) > 1 else 1.0
-
-        fig_hist.add_trace(go.Bar(
-            x=hist_vals,
-            y=y_centers,
-            orientation="h",
-            name="Observed",
-            marker_color="rgba(115, 203, 36, 0.78)",
-            marker_line=dict(color="rgba(55, 92, 24, 0.92)", width=0.2),
-        ))
-
-        # Normal distribution curve scaled to bar counts
-        if sp_std_val and sp_std_val > 0:
-            y_curve = np.linspace(clean.min(), clean.max(), 320)
-            normal_pdf = (1 / (sp_std_val * np.sqrt(2 * np.pi))) * \
-                np.exp(-0.5 * ((y_curve - sp_mean_val) / sp_std_val) ** 2)
-            scaled_counts = normal_pdf * len(clean) * bin_h
-            fig_hist.add_trace(go.Scatter(
-                x=scaled_counts,
-                y=y_curve,
-                mode="lines",
-                name="Normal",
-                line=dict(color="#e4a327", width=2.0, dash="solid"),
-            ))
-
-        # Reference lines: mean, current, ±1σ, ±2σ
-        max_count = float(hist_vals.max()) if len(hist_vals) else 1.0
-        fig_hist.add_hline(y=sp_mean_val, line_dash="dash", line_width=1.1,
-                           line_color="#cfd5dd", annotation_text="Mean")
-        fig_hist.add_hline(y=plot_series.iloc[-1], line_dash="dot", line_width=1.3,
-                           line_color="#f0ad30", annotation_text="Current")
-        for sigma, lbl in [(1, "±1σ"), (2, "±2σ")]:
-            fig_hist.add_hline(y=sp_mean_val + sigma * sp_std_val,
-                               line_dash="dot", line_width=0.7,
-                               line_color="rgba(245,197,24,0.5)")
-            fig_hist.add_hline(y=sp_mean_val - sigma * sp_std_val,
-                               line_dash="dot", line_width=0.7,
-                               line_color="rgba(245,197,24,0.5)",
-                               annotation_text=lbl)
-
+        fig_hist = go.Figure(layout=_base_layout(c, font, px_h,
+                             margin=dict(l=12, r=12, t=24, b=24)))
         fig_hist.update_layout(
-            height=370,
-            barmode="overlay",
-            margin=dict(l=48, r=16, t=4, b=34),
-            xaxis=dict(
-                title="Count",
-                gridcolor="rgba(150, 176, 195, 0.24)",
-                griddash="dot",
-                zeroline=False,
-                range=[0, max_count * 1.2],
-                tickfont=dict(color="#dce3ea"),
-                linecolor="#415262",
-                mirror=True,
-            ),
-            yaxis=dict(
-                title="Spread",
-                gridcolor="rgba(150, 176, 195, 0.24)",
-                griddash="dot",
-                zeroline=False,
-                tickfont=dict(color="#dce3ea"),
-                linecolor="#415262",
-                mirror=True,
-            ),
-            legend=dict(orientation="h", yanchor="top", y=0.97, xanchor="left", x=0.02,
-                        bgcolor="rgba(0,0,0,0)", borderwidth=0),
+            xaxis_title="Frequency",
+            yaxis_title="Spread",
+            bargap=0.03,
         )
+        # horizontal histogram (normalised to density for bell curve comparison)
+        fig_hist.add_trace(go.Histogram(
+            y=clean, nbinsy=n_bins, name="Distribution",
+            marker_color=_AMBER, opacity=0.6,
+            orientation="h", histnorm="probability density",
+        ))
+        # normal distribution bell curve (horizontal: x=pdf, y=spread values)
+        y_range = np.linspace(clean.min(), clean.max(), 300)
+        normal_pdf = (1 / (sp_s * np.sqrt(2 * np.pi))) * \
+            np.exp(-0.5 * ((y_range - sp_m) / sp_s) ** 2)
+        fig_hist.add_trace(go.Scatter(
+            x=normal_pdf, y=y_range, mode="lines", name="Normal",
+            line=dict(color="#ffffff", width=1.8),
+        ))
+        # mean horizontal line
+        fig_hist.add_hline(y=sp_m, line_dash="dash", line_width=1,
+                           line_color="rgba(255,255,255,0.5)",
+                           annotation_text="Mean",
+                           annotation_font=dict(size=9, color="#aaa"))
+        # current spread horizontal line
+        fig_hist.add_hline(y=ps.iloc[-1], line_dash="solid", line_width=1.5,
+                           line_color="#00e676",
+                           annotation_text="Current",
+                           annotation_position="top right",
+                           annotation_font=dict(size=9, color="#00e676"))
 
-        # ── Wrap in dcc.Graph ────────────────────────────────────────────
-        graph_style = {"borderRadius": "4px", "overflow": "hidden", "border": "1px solid #2d3a46", "width": "100%"}
-        price_chart = dcc.Graph(figure=fig_px, config={"displayModeBar": False},
-                                style=graph_style)
-        series_chart = dcc.Graph(figure=fig_sp, config={"displayModeBar": False},
-                                 style=graph_style)
-        hist_chart = dcc.Graph(figure=fig_hist, config={"displayModeBar": False},
-                               style=graph_style)
+        # ── wrap in dcc.Graph ────────────────────────────────────────────
+        gs = {"overflow": "hidden"}
+        price_chart  = dcc.Graph(figure=fig_px,   config=gcfg,
+                                 style={**gs, "height": ch_h})
+        series_chart = dcc.Graph(figure=fig_sp,   config=gcfg,
+                                 style={**gs, "height": ch_h})
+        hist_chart   = dcc.Graph(figure=fig_hist,  config=gcfg,
+                                 style={**gs, "height": ch_h})
 
-        status = (f"✅  {leg_a} vs {leg_b}  |  {len(spread)} obs  |  "
-                  f"Z = {s_z:+.2f}  |  Pctile = {s_pct:.1f}%")
+        status = (f"{leg_a} vs {leg_b}  ·  {sp_lbl}  ·  "
+                  f"{len(spread)} obs  ·  Z = {s_z:+.2f}  ·  "
+                  f"Pctile = {s_pct:.1f}%  ·  {freq.title()}")
 
         return price_chart, series_chart, stat_table, hist_chart, status

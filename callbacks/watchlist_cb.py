@@ -16,7 +16,7 @@ from data import parse_tickers
 
 def _fetch_watchlist_data(tickers):
     period_map = {
-        "1D":  "1d",
+        "1D":  "5d",
         "5D":  "5d",
         "1W":  "5d",
         "1M":  "1mo",
@@ -48,7 +48,16 @@ def _fetch_watchlist_data(tickers):
             row = {"Ticker": ticker, "Price": price, "Ccy": ccy,
                    "EV/Sales": ev_sales, "P/E": pe, "Mkt Cap": mc_fmt}
 
+            # 1D: use currentPrice vs previousClose (yf period="1d" only gives 1 row)
+            prev_close = info.get("regularMarketPreviousClose") or info.get("previousClose")
+            if price and prev_close and prev_close != 0:
+                row["1D"] = round((price / prev_close - 1) * 100, 2)
+            else:
+                row["1D"] = 0.0
+
             for label, period in period_map.items():
+                if label == "1D":
+                    continue   # already handled above
                 try:
                     hist = t.history(period=period)
                     if hist is not None and len(hist) >= 2:
@@ -145,9 +154,10 @@ def register_callbacks(app):
         Output("watchlist-table",  "children"),
         Output("watchlist-status", "children"),
         Input("watchlist-store", "data"),
+        Input("watchlist-refresh", "n_clicks"),
         Input("theme-store",     "data"),
     )
-    def render_watchlist(store, theme_mode):
+    def render_watchlist(store, n_refresh, theme_mode):
         c = get_theme(theme_mode or "dark")
         store = store or []
 
