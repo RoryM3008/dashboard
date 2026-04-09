@@ -1,189 +1,160 @@
-"""Layout — Spread Analysis page: Bloomberg HS-style pairs / relative-value tool."""
+"""Layout — Spread Analysis page: Bloomberg HS <GO> replica.
+
+Single-screen, two-column layout:
+  LEFT  (70%) — Price overlay chart (top) + Spread time series (bottom)
+  RIGHT (30%) — Statistics table   (top) + Histogram           (bottom)
+Controls bar pinned to the top.
+"""
 
 from dash import dcc, html
 
 
 def build_spread_section(LBL, PANEL, C, FONT):
+    # ── compact input style ──────────────────────────────────────────
+    _inp = {
+        "backgroundColor": C["bg"], "border": f"1px solid {C['border']}",
+        "borderRadius": "4px", "color": C["text"], "fontFamily": FONT,
+        "padding": "0.3rem 0.55rem", "fontSize": "0.78rem", "outline": "none",
+    }
+    _lbl = {**LBL, "marginBottom": "2px", "fontSize": "0.65rem",
+            "letterSpacing": "0.04em"}
+
     return html.Div([
         html.Div([
-            html.Div("Spread Analysis",
-                     style={**LBL, "color": C["accent"], "fontSize": "0.72rem"},
-                     className="theme-label-accent"),
-            html.Div("Pairs / relative-value analysis — overlay two instruments, "
-                     "compute their spread, and evaluate current extremeness vs history.",
-                     style={"color": C["muted"], "fontSize": "0.78rem",
-                            "marginBottom": "0.8rem", "fontFamily": FONT},
-                     className="theme-muted"),
-
-            # ── Inputs ────────────────────────────────────────────────────
+            # ═══════════════════ CONTROL BAR ═══════════════════════════
             html.Div([
-                # Leg A
-                html.Div([
-                    html.Div("Leg A (Buy)", style={**LBL, "marginBottom": "0.3rem",
-                             "color": C["green"]}, className="theme-label"),
-                    dcc.Input(
-                        id="spread-leg-a", type="text",
-                        placeholder="e.g. AAPL",
-                        className="theme-input",
-                        style={"backgroundColor": C["bg"],
-                               "border": f"1px solid {C['border']}",
-                               "borderRadius": "8px", "color": C["text"],
-                               "padding": "0.5rem 0.9rem", "fontFamily": FONT,
-                               "fontSize": "0.82rem", "width": "120px", "outline": "none"},
-                    ),
-                ]),
-                # Multiplier A
-                html.Div([
-                    html.Div("Mult A", style={**LBL, "marginBottom": "0.3rem"},
-                             className="theme-label"),
-                    dcc.Input(
-                        id="spread-mult-a", type="number", value=1, step=0.01,
-                        className="theme-input",
-                        style={"backgroundColor": C["bg"],
-                               "border": f"1px solid {C['border']}",
-                               "borderRadius": "8px", "color": C["text"],
-                               "padding": "0.5rem 0.9rem", "fontFamily": FONT,
-                               "fontSize": "0.82rem", "width": "80px", "outline": "none"},
-                    ),
-                ]),
-                # Leg B
-                html.Div([
-                    html.Div("Leg B (Sell)", style={**LBL, "marginBottom": "0.3rem",
-                             "color": C["red"]}, className="theme-label"),
-                    dcc.Input(
-                        id="spread-leg-b", type="text",
-                        placeholder="e.g. MSFT",
-                        className="theme-input",
-                        style={"backgroundColor": C["bg"],
-                               "border": f"1px solid {C['border']}",
-                               "borderRadius": "8px", "color": C["text"],
-                               "padding": "0.5rem 0.9rem", "fontFamily": FONT,
-                               "fontSize": "0.82rem", "width": "120px", "outline": "none"},
-                    ),
-                ]),
-                # Multiplier B
-                html.Div([
-                    html.Div("Mult B", style={**LBL, "marginBottom": "0.3rem"},
-                             className="theme-label"),
-                    dcc.Input(
-                        id="spread-mult-b", type="number", value=1, step=0.01,
-                        className="theme-input",
-                        style={"backgroundColor": C["bg"],
-                               "border": f"1px solid {C['border']}",
-                               "borderRadius": "8px", "color": C["text"],
-                               "padding": "0.5rem 0.9rem", "fontFamily": FONT,
-                               "fontSize": "0.82rem", "width": "80px", "outline": "none"},
-                    ),
-                ]),
-            ], style={"display": "flex", "gap": "0.75rem", "flexWrap": "wrap",
-                      "alignItems": "flex-end", "marginBottom": "0.6rem"}),
-
-            # Row 2: spread type, history, frequency, run button
-            html.Div([
-                html.Div([
-                    html.Div("Spread Type", style={**LBL, "marginBottom": "0.3rem"},
-                             className="theme-label"),
-                    dcc.Dropdown(
-                        id="spread-type",
-                        options=[
-                            {"label": "Difference (A − B)", "value": "diff"},
-                            {"label": "Ratio (A / B)",      "value": "ratio"},
-                            {"label": "Z-Score",            "value": "zscore"},
-                        ],
-                        value="diff", clearable=False,
-                        style={"width": "190px", "fontSize": "0.82rem"},
-                    ),
-                ]),
-                html.Div([
-                    html.Div("History", style={**LBL, "marginBottom": "0.3rem"},
-                             className="theme-label"),
-                    dcc.Dropdown(
-                        id="spread-history",
-                        options=[
-                            {"label": "6 Months", "value": "6mo"},
-                            {"label": "1 Year",   "value": "1y"},
-                            {"label": "2 Years",  "value": "2y"},
-                            {"label": "3 Years",  "value": "3y"},
-                            {"label": "5 Years",  "value": "5y"},
-                            {"label": "Max",      "value": "max"},
-                        ],
-                        value="2y", clearable=False,
-                        style={"width": "140px", "fontSize": "0.82rem"},
-                    ),
-                ]),
-                html.Div([
-                    html.Div("Frequency", style={**LBL, "marginBottom": "0.3rem"},
-                             className="theme-label"),
-                    dcc.Dropdown(
-                        id="spread-freq",
-                        options=[
-                            {"label": "Daily",   "value": "daily"},
-                            {"label": "Weekly",  "value": "weekly"},
-                            {"label": "Monthly", "value": "monthly"},
-                        ],
-                        value="daily", clearable=False,
-                        style={"width": "130px", "fontSize": "0.82rem"},
-                    ),
-                ]),
-                html.Div([
-                    html.Div("Z-Score Window", style={**LBL, "marginBottom": "0.3rem"},
-                             className="theme-label"),
-                    dcc.Input(
-                        id="spread-zscore-window", type="number", value=60,
-                        min=5, step=1,
-                        className="theme-input",
-                        style={"backgroundColor": C["bg"],
-                               "border": f"1px solid {C['border']}",
-                               "borderRadius": "8px", "color": C["text"],
-                               "padding": "0.5rem 0.9rem", "fontFamily": FONT,
-                               "fontSize": "0.82rem", "width": "80px", "outline": "none"},
-                    ),
-                ]),
-                html.Button("Analyse", id="spread-run", n_clicks=0, style={
-                    "backgroundColor": C["accent"], "color": "#000", "border": "none",
-                    "borderRadius": "8px", "padding": "0.55rem 1.5rem",
-                    "fontFamily": FONT, "fontWeight": "700", "fontSize": "0.85rem",
-                    "cursor": "pointer", "alignSelf": "flex-end",
+                html.Div("HS", style={
+                    "color": "#ff8c00", "fontWeight": "800", "fontSize": "1rem",
+                    "fontFamily": "Consolas, monospace", "marginRight": "0.6rem",
+                    "alignSelf": "center",
                 }),
-            ], style={"display": "flex", "gap": "0.75rem", "flexWrap": "wrap",
-                      "alignItems": "flex-end", "marginBottom": "0.9rem"}),
+                # Asset A
+                html.Div([
+                    html.Div("ASSET A", style={**_lbl, "color": C["green"]}),
+                    dcc.Input(id="spread-leg-a", type="text",
+                              placeholder="Ticker", style={**_inp, "width": "90px"}),
+                ]),
+                html.Div([
+                    html.Div("×", style={**_lbl, "color": C["muted"]}),
+                    dcc.Input(id="spread-mult-a", type="number", value=1,
+                              step=0.01, style={**_inp, "width": "52px"}),
+                ]),
+                html.Div("−", style={"color": C["accent"], "fontWeight": "800",
+                                      "fontSize": "1.1rem", "alignSelf": "center",
+                                      "margin": "0 0.15rem"}),
+                # Asset B
+                html.Div([
+                    html.Div("ASSET B", style={**_lbl, "color": C["red"]}),
+                    dcc.Input(id="spread-leg-b", type="text",
+                              placeholder="Ticker", style={**_inp, "width": "90px"}),
+                ]),
+                html.Div([
+                    html.Div("×", style={**_lbl, "color": C["muted"]}),
+                    dcc.Input(id="spread-mult-b", type="number", value=1,
+                              step=0.01, style={**_inp, "width": "52px"}),
+                ]),
+                # Divider
+                html.Div(style={"borderLeft": f"1px solid {C['border']}",
+                                "height": "28px", "alignSelf": "center",
+                                "margin": "0 0.4rem"}),
+                # Spread type
+                html.Div([
+                    html.Div("TYPE", style=_lbl),
+                    dcc.Dropdown(id="spread-type", options=[
+                        {"label": "A − B", "value": "diff"},
+                        {"label": "A / B", "value": "ratio"},
+                        {"label": "Z-Score", "value": "zscore"},
+                    ], value="diff", clearable=False,
+                    style={"width": "95px", "fontSize": "0.76rem"}),
+                ]),
+                # History
+                html.Div([
+                    html.Div("PERIOD", style=_lbl),
+                    dcc.Dropdown(id="spread-history", options=[
+                        {"label": "6M", "value": "6mo"},
+                        {"label": "1Y", "value": "1y"},
+                        {"label": "2Y", "value": "2y"},
+                        {"label": "3Y", "value": "3y"},
+                        {"label": "5Y", "value": "5y"},
+                        {"label": "MAX", "value": "max"},
+                    ], value="2y", clearable=False,
+                    style={"width": "75px", "fontSize": "0.76rem"}),
+                ]),
+                # Frequency
+                html.Div([
+                    html.Div("FREQ", style=_lbl),
+                    dcc.Dropdown(id="spread-freq", options=[
+                        {"label": "D", "value": "daily"},
+                        {"label": "W", "value": "weekly"},
+                        {"label": "M", "value": "monthly"},
+                    ], value="daily", clearable=False,
+                    style={"width": "58px", "fontSize": "0.76rem"}),
+                ]),
+                # Z-window
+                html.Div([
+                    html.Div("Z-WIN", style=_lbl),
+                    dcc.Input(id="spread-zscore-window", type="number", value=60,
+                              min=5, step=1, style={**_inp, "width": "50px"}),
+                ]),
+                # Go button
+                html.Button("GO", id="spread-run", n_clicks=0, style={
+                    "backgroundColor": "#ff8c00", "color": "#000", "border": "none",
+                    "borderRadius": "3px", "padding": "0.35rem 1.2rem",
+                    "fontFamily": "Consolas, monospace", "fontWeight": "800",
+                    "fontSize": "0.85rem", "cursor": "pointer", "alignSelf": "flex-end",
+                    "letterSpacing": "0.05em",
+                }),
+            ], style={
+                "display": "flex", "gap": "0.45rem", "flexWrap": "wrap",
+                "alignItems": "flex-end", "padding": "0.45rem 0.5rem",
+                "backgroundColor": "rgba(255,140,0,0.06)",
+                "borderBottom": f"1px solid {C['border']}",
+                "borderRadius": "4px 4px 0 0",
+            }),
 
-            html.Div(id="spread-status",
-                     style={"color": C["muted"], "fontSize": "0.75rem",
-                            "fontFamily": FONT, "marginBottom": "0.65rem"},
-                     className="theme-muted"),
+            # Status bar
+            html.Div(id="spread-status", style={
+                "color": C["muted"], "fontSize": "0.68rem", "fontFamily": FONT,
+                "padding": "0.25rem 0.5rem",
+                "borderBottom": f"1px solid {C['border']}",
+            }),
 
-            # ── Outputs ───────────────────────────────────────────────────
-
-            # 1) Dual price overlay
-            html.Div("Price Overlay", style={**LBL, "marginBottom": "0.3rem"},
-                     className="theme-label"),
-            html.Div(id="spread-price-chart", style={"marginBottom": "1rem"}),
-
-            html.Hr(style={"borderColor": C["border"], "margin": "0.8rem 0"}),
-
-            # 2) Spread time-series
-            html.Div("Spread Time Series", style={**LBL, "marginBottom": "0.3rem"},
-                     className="theme-label"),
-            html.Div(id="spread-series-chart", style={"marginBottom": "1rem"}),
-
-            html.Hr(style={"borderColor": C["border"], "margin": "0.8rem 0"}),
-
-            # 3) Stats table + histogram side-by-side
+            # ═══════════════════ MAIN BODY: 2-COLUMN ══════════════════
             html.Div([
-                # Stats summary
-                html.Div([
-                    html.Div("Spread Statistics", style={**LBL, "marginBottom": "0.3rem"},
-                             className="theme-label"),
-                    html.Div(id="spread-stats-table"),
-                ], style={"flex": "1", "minWidth": "260px"}),
-                # Histogram
-                html.Div([
-                    html.Div("Spread Distribution", style={**LBL, "marginBottom": "0.3rem"},
-                             className="theme-label"),
-                    html.Div(id="spread-histogram"),
-                ], style={"flex": "1.5", "minWidth": "350px"}),
-            ], style={"display": "flex", "gap": "1.2rem", "flexWrap": "wrap"}),
 
-        ], style=PANEL, className="theme-panel"),
+                # ── LEFT COLUMN (charts) ──────────────────────────────
+                html.Div([
+                    html.Div(id="spread-price-chart"),
+                    html.Div(id="spread-series-chart"),
+                ], style={
+                    "flex": "7", "minWidth": "400px",
+                    "display": "flex", "flexDirection": "column",
+                    "gap": "2px",
+                }),
+
+                # ── RIGHT COLUMN (stats + histogram) ─────────────────
+                html.Div([
+                    html.Div(id="spread-stats-table", style={
+                        "borderBottom": f"1px solid {C['border']}",
+                        "paddingBottom": "0.3rem",
+                    }),
+                    html.Div(id="spread-histogram"),
+                ], style={
+                    "flex": "3", "minWidth": "260px",
+                    "display": "flex", "flexDirection": "column",
+                    "gap": "2px",
+                }),
+
+            ], style={
+                "display": "flex", "gap": "2px",
+                "flex": "1", "overflow": "hidden",
+            }),
+
+        ], style={
+            **PANEL,
+            "display": "flex", "flexDirection": "column",
+            "padding": "0",
+            "height": "calc(100vh - 180px)",
+            "overflow": "hidden",
+        }, className="theme-panel"),
     ], id="section-spread", style={"display": "none"})

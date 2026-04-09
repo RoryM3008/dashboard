@@ -40,12 +40,25 @@ def build_watchlist_section(LBL, PANEL, C, FONT):
                     "fontFamily": FONT, "fontWeight": "600", "fontSize": "0.82rem",
                     "cursor": "pointer",
                 }),
+                html.Button("🔄 Refresh Prices", id="watchlist-refresh", n_clicks=0,
+                            style={
+                    "backgroundColor": "transparent", "color": C["accent"],
+                    "border": f"1px solid {C['accent']}",
+                    "borderRadius": "8px", "padding": "0.55rem 1rem",
+                    "fontFamily": FONT, "fontWeight": "600", "fontSize": "0.82rem",
+                    "cursor": "pointer",
+                }),
             ], style={"display": "flex", "gap": "0.75rem", "marginBottom": "0.5rem"}),
 
             html.Div("Type one or more tickers and click + Add. Click ✕ on a row to remove it.",
                      style={"color": C["muted"], "fontSize": "0.68rem",
                             "marginTop": "0.2rem", "marginBottom": "0.6rem", "fontFamily": FONT},
                      className="theme-muted"),
+
+            # Hidden components to keep callback IDs valid
+            dcc.Dropdown(id="watchlist-periods", style={"display": "none"},
+                         value=["1D", "5D", "1W", "1M", "3M", "6M", "1Y", "2Y"]),
+            dcc.DatePickerRange(id="watchlist-custom-dates", style={"display": "none"}),
 
             # Pill-style list of current tickers
             html.Div(id="watchlist-pills",
