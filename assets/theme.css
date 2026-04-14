@@ -201,3 +201,14 @@
 #root-container.light-mode .spread-toolbar-dropdown .Select-value-label {
     background-color: #0f1114 !important;
 }
+
+/* ─── Clickable ticker hover ─────────────────────────────────────────────── */
+.clickable-ticker {
+    cursor: pointer;
+    transition: opacity 0.15s ease, text-decoration 0.15s ease;
+}
+.clickable-ticker:hover {
+    opacity: 0.75;
+    text-decoration: underline;
+    text-decoration-color: #f0b90b;
+}

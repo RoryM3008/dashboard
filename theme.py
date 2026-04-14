@@ -125,6 +125,26 @@ MAIN_MENU_BTN_ACTIVE = _main_menu_btn_active(C)
 INDICES = {"S&P 500": "^GSPC", "NASDAQ": "^IXIC", "DOW": "^DJI", "VIX": "^VIX"}
 PERIODS = ["1mo", "3mo", "6mo", "1y", "2y", "5y"]
 
+FX_PAIRS = {
+    "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X",
+    "USD/CHF": "USDCHF=X", "AUD/USD": "AUDUSD=X", "USD/CAD": "USDCAD=X",
+    "NZD/USD": "NZDUSD=X", "EUR/GBP": "EURGBP=X",
+}
+BONDS = {
+    "US 2Y":  "^IRX",   "US 5Y":  "^FVX",
+    "US 10Y": "^TNX",   "US 30Y": "^TYX",
+}
+COMMODITIES = {
+    "Gold": "GC=F", "Silver": "SI=F", "Crude Oil": "CL=F",
+    "Natural Gas": "NG=F", "Copper": "HG=F",
+}
+SECTOR_ETFS = {
+    "Technology": "XLK", "Healthcare": "XLV", "Financials": "XLF",
+    "Energy": "XLE", "Consumer Disc.": "XLY", "Consumer Staples": "XLP",
+    "Industrials": "XLI", "Materials": "XLB", "Utilities": "XLU",
+    "Real Estate": "XLRE", "Comm. Services": "XLC",
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Screener universe — Full S&P 500 + International ADRs (~540 stocks)
 # ─────────────────────────────────────────────────────────────────────────────

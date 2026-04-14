@@ -104,34 +104,26 @@ app.layout = html.Div(id="root-container", style={
                  className="theme-muted"),
     ], style={"display": "flex", "alignItems": "center", "gap": "1rem", "marginBottom": "1.5rem"}),
 
-    # Holdings input
-    html.Div([
-        html.Div("Your Holdings", style=LBL, id="holdings-label", className="theme-label"),
-        html.Div([
-            dcc.Input(id="ticker-input", type="text",
-                      placeholder="e.g. AAPL, MSFT, TSLA, NVDA", debounce=False,
-                      className="theme-input",
-                      style={"backgroundColor": C["bg"], "border": f"1px solid {C['accent']}",
-                             "borderRadius": "8px", "color": C["text"],
-                             "padding": "0.55rem 1rem", "fontFamily": FONT,
-                             "fontSize": "0.85rem", "flex": "1", "outline": "none"}),
-            html.Button("Refresh", id="refresh-btn", n_clicks=0,
-                        style={"backgroundColor": C["accent"], "color": "#000",
-                               "border": "none", "borderRadius": "8px",
-                               "padding": "0.55rem 1.4rem", "fontFamily": FONT,
-                               "fontWeight": "700", "fontSize": "0.85rem", "cursor": "pointer"}),
-        ], style={"display": "flex", "gap": "0.75rem"}),
-        html.Div("Enter tickers separated by commas, then click Refresh.",
-                 style={"color": C["muted"], "fontSize": "0.68rem",
-                        "marginTop": "0.4rem", "fontFamily": FONT},
-                 className="theme-muted"),
-    ], id="holdings-panel", style=PANEL, className="theme-panel"),
+    # Hidden holdings input (still used by callbacks)
+    dcc.Input(id="ticker-input", type="text",
+              placeholder="e.g. AAPL, MSFT, TSLA, NVDA", debounce=False,
+              style={"display": "none"}),
+    html.Button("Refresh", id="refresh-btn", n_clicks=0,
+                style={"display": "none"}),
 
-    # Sidebar menu + page sections
+    # Menu button + overlay
+    html.Button("☰ Menu", id="menu-toggle-btn", n_clicks=0,
+                style={"position": "fixed", "top": "1.2rem", "right": "1.2rem",
+                       "zIndex": "1000", "backgroundColor": C["accent"], "color": "#000",
+                       "border": "none", "borderRadius": "8px",
+                       "padding": "0.5rem 1rem", "fontFamily": FONT,
+                       "fontWeight": "700", "fontSize": "0.82rem", "cursor": "pointer",
+                       "boxShadow": "0 2px 12px rgba(0,0,0,0.4)"}),
+
+    # Slide-out menu overlay
     html.Div([
-        # Sidebar
         html.Div([
-            html.Div("Menu", style={**LBL, "marginBottom": "0.5rem"}, id="sidebar-label",
+            html.Div("Navigate", style={**LBL, "marginBottom": "0.6rem"},
                      className="theme-label"),
             html.Button("Dashboard",      id="menu-dashboard",    n_clicks=0, style=MAIN_MENU_BTN_ACTIVE),
             html.Button("News",           id="menu-news",         n_clicks=0, style=MAIN_MENU_BTN),
@@ -142,31 +134,57 @@ app.layout = html.Div(id="root-container", style={
             html.Button("Watchlist",      id="menu-watchlist",    n_clicks=0, style=MAIN_MENU_BTN),
             html.Button("Markets",        id="menu-markets",      n_clicks=0, style=MAIN_MENU_BTN),
             html.Button("Portfolio",      id="menu-port",         n_clicks=0, style=MAIN_MENU_BTN),
-            html.Button("Prices",        id="menu-prices",      n_clicks=0, style=MAIN_MENU_BTN),
-            html.Button("Risk",          id="menu-risk",        n_clicks=0, style=MAIN_MENU_BTN),
-            html.Button("Heatmap",       id="menu-heatmap",     n_clicks=0, style=MAIN_MENU_BTN),
-            html.Button("Spread",        id="menu-spread",      n_clicks=0, style=MAIN_MENU_BTN),
-            dcc.Store(id="active-main-menu", data="dashboard"),
-        ], id="sidebar-panel", className="theme-panel", style={**PANEL, "width": "220px", "padding": "0.9rem", "display": "flex",
-                  "flexDirection": "column", "gap": "0.45rem", "position": "sticky", "top": "1rem"}),
+            html.Button("Prices",         id="menu-prices",       n_clicks=0, style=MAIN_MENU_BTN),
+            html.Button("Risk",           id="menu-risk",         n_clicks=0, style=MAIN_MENU_BTN),
+            html.Button("Heatmap",        id="menu-heatmap",      n_clicks=0, style=MAIN_MENU_BTN),
+            html.Button("Spread",         id="menu-spread",       n_clicks=0, style=MAIN_MENU_BTN),
+            html.Hr(style={"borderColor": C["border"], "margin": "0.6rem 0"}),
+            html.Div("Holdings", style={**LBL, "marginBottom": "0.3rem"},
+                     className="theme-label"),
+            dcc.Input(id="menu-ticker-input", type="text",
+                      placeholder="e.g. AAPL, MSFT, TSLA", debounce=True,
+                      className="theme-input",
+                      style={"backgroundColor": C["bg"], "border": f"1px solid {C['border']}",
+                             "borderRadius": "6px", "color": C["text"],
+                             "padding": "0.4rem 0.6rem", "fontFamily": FONT,
+                             "fontSize": "0.78rem", "width": "100%", "outline": "none",
+                             "boxSizing": "border-box"}),
+        ], style={**PANEL, "width": "220px", "padding": "1rem",
+                  "display": "flex", "flexDirection": "column", "gap": "0.4rem",
+                  "maxHeight": "90vh", "overflowY": "auto"}),
+    ], id="menu-overlay",
+       style={"position": "fixed", "top": "0", "right": "-280px",
+              "width": "280px", "height": "100vh", "zIndex": "999",
+              "display": "flex", "alignItems": "flex-start",
+              "paddingTop": "3.5rem", "paddingRight": "1rem",
+              "justifyContent": "center",
+              "transition": "right 0.25s ease"}),
 
-        # Page sections (one visible at a time)
-        html.Div([
-            build_dashboard_section(LBL, PANEL),
-            build_news_section(LBL, PANEL),
-            build_analyser_section(LBL, PANEL, C, FONT, NAV_BTN_ACTIVE, NAV_BTN, PERIODS),
-            build_screener_section(LBL, PANEL, C, FONT),
-            build_correlation_section(LBL, PANEL, C, FONT),
-            build_performance_section(LBL, PANEL, C, FONT),
-            build_watchlist_section(LBL, PANEL, C, FONT),
-            build_markets_section(LBL, PANEL, C, FONT),
-            build_port_section(LBL, PANEL, C, FONT),
-            build_prices_section(LBL, PANEL, C, FONT),
-            build_risk_section(LBL, PANEL, C, FONT),
-            build_heatmap_section(LBL, PANEL, C, FONT),
-            build_spread_section(LBL, PANEL, C, FONT),
-        ], style={"flex": "1", "minWidth": "280px"}),
-    ], style={"display": "flex", "gap": "1rem", "alignItems": "flex-start", "flexWrap": "wrap"}),
+    # Backdrop (click to close)
+    html.Div(id="menu-backdrop", n_clicks=0,
+             style={"display": "none", "position": "fixed", "top": "0", "left": "0",
+                    "width": "100vw", "height": "100vh", "zIndex": "998",
+                    "backgroundColor": "rgba(0,0,0,0.5)"}),
+
+    dcc.Store(id="active-main-menu", data="dashboard"),
+    dcc.Store(id="menu-open", data=False),
+
+    # Page sections (full width now)
+    html.Div([
+        build_dashboard_section(LBL, PANEL),
+        build_news_section(LBL, PANEL),
+        build_analyser_section(LBL, PANEL, C, FONT, NAV_BTN_ACTIVE, NAV_BTN, PERIODS),
+        build_screener_section(LBL, PANEL, C, FONT),
+        build_correlation_section(LBL, PANEL, C, FONT),
+        build_performance_section(LBL, PANEL, C, FONT),
+        build_watchlist_section(LBL, PANEL, C, FONT),
+        build_markets_section(LBL, PANEL, C, FONT),
+        build_port_section(LBL, PANEL, C, FONT),
+        build_prices_section(LBL, PANEL, C, FONT),
+        build_risk_section(LBL, PANEL, C, FONT),
+        build_heatmap_section(LBL, PANEL, C, FONT),
+        build_spread_section(LBL, PANEL, C, FONT),
+    ], style={"width": "100%"}),
 
     dcc.Interval(id="auto-refresh", interval=5 * 60 * 1000, n_intervals=0),
 ])
@@ -209,9 +227,6 @@ def toggle_theme(n, current):
 @app.callback(
     Output("root-container", "style"),
     Output("root-container", "className"),
-    Output("holdings-panel", "style"),
-    Output("sidebar-panel", "style"),
-    Output("ticker-input", "style"),
     Output("title-text", "style"),
     Output("subtitle-text", "style"),
     Input("theme-store", "data"),
@@ -221,25 +236,16 @@ def restyle_shell(mode):
     root_style = {
         "backgroundColor": c["bg"],
         "minHeight": "100vh",
-        "padding": "1.75rem 2rem",
+        "padding": "1.25rem 1.5rem",
         "fontFamily": FONT,
         "color": c["text"],
     }
     body_class = "light-mode" if mode == "light" else "dark-mode"
-    panel = _panel(c)
-    sidebar = {**_panel(c), "width": "220px", "padding": "0.9rem", "display": "flex",
-               "flexDirection": "column", "gap": "0.45rem", "position": "sticky", "top": "1rem"}
-    inp_style = {
-        "backgroundColor": c["bg"], "border": f"1px solid {c['accent']}",
-        "borderRadius": "8px", "color": c["text"],
-        "padding": "0.55rem 1rem", "fontFamily": FONT,
-        "fontSize": "0.85rem", "flex": "1", "outline": "none",
-    }
     title_style = {"margin": 0, "fontFamily": FONT, "fontWeight": "800",
                    "fontSize": "1.7rem", "color": c["text"]}
     subtitle_style = {"color": c["subtext"], "fontSize": "0.75rem",
                       "marginTop": "2px", "fontFamily": FONT}
-    return root_style, body_class, panel, sidebar, inp_style, title_style, subtitle_style
+    return root_style, body_class, title_style, subtitle_style
 
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":

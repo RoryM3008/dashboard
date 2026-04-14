@@ -16,6 +16,7 @@ from dash import dcc, html
 from theme import (
     C, FONT, LBL, PANEL,
     INDICES, SCREENER_UNIVERSE,
+    FX_PAIRS, BONDS, COMMODITIES, SECTOR_ETFS,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -87,6 +88,67 @@ def fetch_prices(tickers):
     return pd.DataFrame(rows)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# S&P 500 top movers
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SP500_CACHE = {"tickers": None, "ts": None}
+
+
+def _get_sp500_tickers():
+    """Return list of S&P 500 tickers (cached for 24 h)."""
+    import time
+    now = time.time()
+    if _SP500_CACHE["tickers"] and _SP500_CACHE["ts"] and now - _SP500_CACHE["ts"] < 86400:
+        return _SP500_CACHE["tickers"]
+    try:
+        table = pd.read_html(
+            "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
+            attrs={"id": "constituents"},
+        )[0]
+        ticks = table["Symbol"].str.replace(".", "-", regex=False).tolist()
+        _SP500_CACHE["tickers"] = ticks
+        _SP500_CACHE["ts"] = now
+        return ticks
+    except Exception:
+        return [
+            "AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "META", "TSLA", "BRK-B",
+            "UNH", "JNJ", "V", "XOM", "JPM", "PG", "MA", "HD", "CVX", "LLY",
+            "MRK", "ABBV", "PEP", "KO", "AVGO", "COST", "TMO", "MCD", "WMT",
+            "CSCO", "ACN", "ABT", "DHR", "NEE", "LIN", "PM", "TXN", "UPS",
+        ]
+
+
+def fetch_sp500_movers(n=10):
+    """Return (gainers_df, losers_df) — top n S&P 500 gainers and losers."""
+    tickers = _get_sp500_tickers()
+    try:
+        df = yf.download(tickers, period="2d", group_by="ticker",
+                         threads=True, progress=False)
+    except Exception:
+        return pd.DataFrame(), pd.DataFrame()
+    rows = []
+    for t in tickers:
+        try:
+            close = df[t]["Close"].dropna()
+            if len(close) < 2:
+                continue
+            prev, last = float(close.iloc[-2]), float(close.iloc[-1])
+            chg = last - prev
+            pct = (chg / prev) * 100 if prev else 0
+            rows.append({"Ticker": t, "Price": f"${last:,.2f}",
+                         "Chg %": f"{'+' if pct >= 0 else ''}{pct:.2f}%",
+                         "_chg": pct})
+        except Exception:
+            continue
+    if not rows:
+        return pd.DataFrame(), pd.DataFrame()
+    result = pd.DataFrame(rows).sort_values("_chg", ascending=False)
+    gainers = result.head(n).reset_index(drop=True)
+    losers = result.tail(n).sort_values("_chg").reset_index(drop=True)
+    return gainers, losers
+
+
 def fetch_index_data():
     results = []
     for name, sym in INDICES.items():
@@ -96,9 +158,9 @@ def fetch_index_data():
             prv = fi.previous_close
             chg = p - prv
             pct = (chg / prv) * 100 if prv else 0
-            results.append({"name": name, "price": p, "chg": chg, "pct": pct})
+            results.append({"name": name, "symbol": sym, "price": p, "chg": chg, "pct": pct})
         except Exception:
-            results.append({"name": name, "price": None, "chg": 0, "pct": 0})
+            results.append({"name": name, "symbol": sym, "price": None, "chg": 0, "pct": 0})
     return results
 
 
@@ -831,3 +893,68 @@ def index_card(name, price, chg, pct, c=None):
     ], style={"backgroundColor": c["bg"], "border": f"1px solid {c['border']}",
               "borderRadius": "10px", "padding": "1rem",
               "flex": "1", "minWidth": "130px"})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bloomberg-style data fetchers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def fetch_quote_table(pairs_dict):
+    """Fetch price + daily change for a dict of {label: yf_symbol}.
+    Returns list of dicts: [{name, price, chg, pct}, ...]."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _one(name, sym):
+        try:
+            fi = yf.Ticker(sym).fast_info
+            p = fi.last_price
+            prev = fi.previous_close
+            chg = p - prev if (p and prev) else 0
+            pct = (chg / prev * 100) if prev else 0
+            return {"name": name, "symbol": sym, "price": p, "chg": chg, "pct": pct}
+        except Exception:
+            return {"name": name, "symbol": sym, "price": None, "chg": 0, "pct": 0}
+
+    results = []
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        futs = {pool.submit(_one, n, s): n for n, s in pairs_dict.items()}
+        for f in as_completed(futs):
+            results.append(f.result())
+    # Preserve insertion order from dict
+    order = {n: i for i, n in enumerate(pairs_dict)}
+    results.sort(key=lambda r: order.get(r["name"], 999))
+    return results
+
+
+def fetch_sector_performance():
+    """Fetch daily % change for sector ETFs. Returns list of dicts."""
+    return fetch_quote_table(SECTOR_ETFS)
+
+
+def fetch_chart_data(symbol="^GSPC", period="5d", interval="15m"):
+    """Return a DataFrame (Date, Open, High, Low, Close, Volume) for any ticker."""
+    try:
+        df = yf.Ticker(symbol).history(period=period, interval=interval)
+        df = df.reset_index()
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def fetch_portfolio_history(tickers, period="1mo"):
+    """Fetch normalised (base-100) close prices for a list of tickers."""
+    if not tickers:
+        return pd.DataFrame()
+    try:
+        df = yf.download(tickers, period=period, auto_adjust=True, progress=False)
+        if isinstance(df.columns, pd.MultiIndex):
+            df = df["Close"]
+        elif "Close" in df.columns and len(tickers) == 1:
+            df = df[["Close"]].rename(columns={"Close": tickers[0]})
+        # Normalise to base 100
+        first = df.iloc[0]
+        first = first.replace(0, np.nan)
+        df = (df / first) * 100
+        return df.dropna(how="all")
+    except Exception:
+        return pd.DataFrame()
