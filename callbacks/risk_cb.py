@@ -4,6 +4,7 @@ import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
 import dash
+from concurrent.futures import ThreadPoolExecutor
 from dash import dcc, html, Input, Output, State, no_update
 
 from theme import FONT, get_theme
@@ -197,11 +198,11 @@ def register_callbacks(app):
             active = hdf[hdf["shares"] > 0].copy()
             if active.empty:
                 return no_update, no_update, "No active holdings."
-            # Resolve to Yahoo tickers for downstream yfinance calls
-            yf_tickers = []
-            for t in active["ticker"]:
-                yf_t, _ = _resolve_ticker(t)
-                yf_tickers.append(yf_t)
+            # Resolve to Yahoo tickers for downstream yfinance calls (parallel)
+            ticker_list = active["ticker"].tolist()
+            with ThreadPoolExecutor(max_workers=10) as pool:
+                yf_tickers = list(pool.map(
+                    lambda t: _resolve_ticker(t)[0], ticker_list))
             tickers_str = ", ".join(yf_tickers)
             weights_str = ", ".join(f"{w / 100:.4f}" for w in active["weight_pct"])
             n_stocks = len(yf_tickers)

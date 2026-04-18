@@ -33,6 +33,7 @@ import sqlite3
 import uuid
 from collections import defaultdict
 from datetime import datetime, date
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import pandas as pd
@@ -526,17 +527,21 @@ def _resolve_ticker(ticker):
 
 
 def _detect_ccy(tickers):
-    """Detect the quote currency for each ticker from yfinance.
+    """Detect the quote currency for each ticker from yfinance (parallel).
     Returns dict  ticker → currency code  ('USD', 'GBp', 'GBP', 'EUR', …).
     'GBp' / 'GBX' = pence Sterling → divide by 100 to get GBP.
     """
-    ccy_map = {}
-    for t in tickers:
+    def _one(t):
         try:
             _, fi = _resolve_ticker(t)
-            ccy_map[t] = fi.currency if fi else "USD"
+            return t, (fi.currency if fi else "USD")
         except Exception:
-            ccy_map[t] = "USD"
+            return t, "USD"
+
+    ccy_map = {}
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        for ticker, ccy in pool.map(lambda t: _one(t), tickers):
+            ccy_map[ticker] = ccy
     return ccy_map
 
 
@@ -585,20 +590,24 @@ def compute_holdings(txns_df, last_prices=None):
 
     if last_prices is None:
         last_prices = {}
-        for t in tickers:
-            yf_t, fi = _resolve_ticker(t)
-            if fi is not None:
-                try:
-                    last_prices[t] = round(fi.last_price, 2)
-                except Exception:
-                    last_prices[t] = None
-                try:
-                    ticker_ccy[t] = fi.currency
-                except Exception:
-                    ticker_ccy[t] = "USD"
-            else:
-                last_prices[t] = None
-                ticker_ccy[t] = "USD"
+        ticker_ccy = {}
+
+        def _fetch_one(t):
+            yf_t, _ = _resolve_ticker(t)
+            # Fresh fetch — same as the Prices page uses
+            lp, ccy = None, "USD"
+            try:
+                fi = yf.Ticker(yf_t).fast_info
+                lp = round(fi.last_price, 2)
+                ccy = fi.currency
+            except Exception:
+                pass
+            return t, lp, ccy
+
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            for t, lp, ccy in pool.map(_fetch_one, tickers):
+                last_prices[t] = lp
+                ticker_ccy[t] = ccy
     else:
         ticker_ccy = _detect_ccy(tickers)
 
@@ -612,7 +621,7 @@ def compute_holdings(txns_df, last_prices=None):
             continue
         total_cost = sum(l[0] * l[1] for l in open_lots)  # GBP cost
         avg_cost = total_cost / shares if shares > 0 else 0  # GBP per share
-        lp_raw = latest_overrides.get(t, last_prices.get(t))
+        lp_raw = last_prices.get(t)                           # always use live price
         ccy = ticker_ccy.get(t, "USD")
         if ccy in ("GBp", "GBX"):
             lp_gbp = lp_raw / 100 if lp_raw else None       # pence → pounds
@@ -734,13 +743,17 @@ def compute_portfolio_ts(txns_df, return_debug=False):
     stock_txns = txns_df[txns_df["side"].isin(["BUY", "SELL"])]
     tickers = list(stock_txns["ticker"].unique()) if not stock_txns.empty else []
 
-    # Resolve tickers (e.g. CSPX → CSPX.L) for yfinance download
-    yf_map = {}   # user_ticker → yf_ticker
-    for t in tickers:
+    # Resolve tickers (e.g. CSPX → CSPX.L) for yfinance download (parallel)
+    def _resolve_one(t):
         yf_t, _ = _resolve_ticker(t)
-        yf_map[t] = yf_t
+        return t, yf_t
 
-    # Detect currency for each ticker
+    yf_map = {}   # user_ticker → yf_ticker
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        for t, yf_t in pool.map(_resolve_one, tickers):
+            yf_map[t] = yf_t
+
+    # Detect currency for each ticker (parallel)
     ticker_ccy = _detect_ccy(tickers)
 
     # Determine which FX pairs we need

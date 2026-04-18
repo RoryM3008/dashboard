@@ -4,7 +4,12 @@ No Dash app reference here; pure functions that return DataFrames or Dash compon
 """
 
 import datetime
+import json
+import os
 import re
+import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import feedparser
@@ -12,6 +17,49 @@ import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
 from dash import dcc, html
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TTL cache — avoids re-fetching the same data within a short window
+# ─────────────────────────────────────────────────────────────────────────────
+_CACHE = {}
+_DISK_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache")
+os.makedirs(_DISK_CACHE_DIR, exist_ok=True)
+
+
+def _disk_save(key, data):
+    """Persist data to a JSON file on disk."""
+    try:
+        path = os.path.join(_DISK_CACHE_DIR, f"{key}.json")
+        with open(path, "w") as f:
+            json.dump({"ts": time.time(), "val": data}, f)
+    except Exception:
+        pass
+
+
+def _disk_load(key, max_age=86400):
+    """Load data from disk cache. Returns None if missing or too old."""
+    try:
+        path = os.path.join(_DISK_CACHE_DIR, f"{key}.json")
+        if not os.path.exists(path):
+            return None
+        with open(path) as f:
+            blob = json.load(f)
+        if time.time() - blob["ts"] > max_age:
+            return None
+        return blob["val"]
+    except Exception:
+        return None
+
+
+def _cached(key, ttl_seconds, func, *args, **kwargs):
+    """Return cached result if fresh, otherwise call func and cache it."""
+    now = time.time()
+    entry = _CACHE.get(key)
+    if entry and (now - entry["ts"]) < ttl_seconds:
+        return entry["val"]
+    val = func(*args, **kwargs)
+    _CACHE[key] = {"val": val, "ts": now}
+    return val
 
 from theme import (
     C, FONT, LBL, PANEL,
@@ -34,30 +82,35 @@ def parse_tickers(raw):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def fetch_earnings(tickers):
-    rows = []
     today  = datetime.date.today()
     cutoff = today + datetime.timedelta(days=30)
-    for ticker in tickers:
+
+    def _one(ticker):
         try:
             info = yf.Ticker(ticker).info
             ts = info.get("earningsTimestamp") or info.get("earningsTimestampStart")
             if ts:
                 dt = datetime.date.fromtimestamp(ts)
                 if today <= dt <= cutoff:
-                    # EPS fields
                     exp_eps = info.get("earningsEstimate") or info.get("forwardEps")
                     last_eps = info.get("trailingEps")
                     sector = info.get("sector", "—")
-
-                    rows.append({"Ticker": ticker,
-                                 "Sector": sector or "—",
-                                 "Earnings Date": dt.strftime("%d %b %Y"),
-                                 "Days Away": (dt - today).days,
-                                 "Est EPS": round(float(exp_eps), 2) if exp_eps is not None else None,
-                                 "Last EPS": round(float(last_eps), 2) if last_eps is not None else None,
-                                 "_date": dt})
+                    return {"Ticker": ticker,
+                            "Sector": sector or "—",
+                            "Earnings Date": dt.strftime("%d %b %Y"),
+                            "Days Away": (dt - today).days,
+                            "Est EPS": round(float(exp_eps), 2) if exp_eps is not None else None,
+                            "Last EPS": round(float(last_eps), 2) if last_eps is not None else None,
+                            "_date": dt}
         except Exception:
             pass
+        return None
+
+    rows = []
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        for result in pool.map(_one, tickers):
+            if result:
+                rows.append(result)
     if not rows:
         return pd.DataFrame(columns=["Ticker", "Sector", "Earnings Date", "Days Away", "Est EPS", "Last EPS"])
     df = pd.DataFrame(rows).sort_values("_date")
@@ -65,8 +118,7 @@ def fetch_earnings(tickers):
 
 
 def fetch_prices(tickers):
-    rows = []
-    for ticker in tickers:
+    def _one(ticker):
         try:
             fi    = yf.Ticker(ticker).fast_info
             price = round(fi.last_price, 2)
@@ -76,16 +128,19 @@ def fetch_prices(tickers):
             mc    = fi.market_cap
             cap   = (f"${mc/1e9:.1f}B" if mc and mc >= 1e9
                      else f"${mc/1e6:.1f}M" if mc else "—")
-            rows.append({"Ticker": ticker,
-                         "Price":   f"${price:,.2f}",
-                         "Change":  f"{'+' if chg>=0 else ''}{chg:.2f}",
-                         "Chg %":   f"{'+' if pct>=0 else ''}{pct:.2f}%",
-                         "Mkt Cap": cap,
-                         "_chg":    chg})
+            return {"Ticker": ticker,
+                    "Price":   f"${price:,.2f}",
+                    "Change":  f"{'+' if chg>=0 else ''}{chg:.2f}",
+                    "Chg %":   f"{'+' if pct>=0 else ''}{pct:.2f}%",
+                    "Mkt Cap": cap,
+                    "_chg":    chg}
         except Exception:
-            rows.append({"Ticker": ticker, "Price": "—", "Change": "—",
-                         "Chg %": "—", "Mkt Cap": "—", "_chg": 0})
-    return pd.DataFrame(rows)
+            return {"Ticker": ticker, "Price": "—", "Change": "—",
+                    "Chg %": "—", "Mkt Cap": "—", "_chg": 0}
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        results = list(pool.map(_one, tickers))
+    return pd.DataFrame(results)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -94,73 +149,287 @@ def fetch_prices(tickers):
 
 _SP500_CACHE = {"tickers": None, "ts": None}
 
+# Full S&P 500 constituents (as of April 2026) — used as fallback when
+# the Wikipedia scrape fails (corporate proxy / SSL / rate-limit).
+_SP500_HARDCODED = [
+    "MMM","AOS","ABT","ABBV","ACN","ADBE","AMD","AES","AFL","A","APD","ABNB",
+    "AKAM","ALB","ARE","ALGN","ALLE","LNT","ALL","GOOGL","GOOG","MO","AMZN",
+    "AMCR","AEE","AAL","AEP","AXP","AIG","AMT","AWK","AMP","AME","AMGN","APH",
+    "ADI","ANSS","AON","APA","AAPL","AMAT","APTV","ACGL","ADM","ANET","AJG",
+    "AIZ","T","ATO","ADSK","ADP","AZO","AVB","AVY","AXON","BKR","BALL","BAC",
+    "BK","BBWI","BAX","BDX","BRK-B","BBY","BIO","TECH","BIIB","BLK","BA","BKNG",
+    "BWA","BSX","BMY","AVGO","BR","BRO","BF-B","BLDR","BG","CDNS","CZR","CPT",
+    "CPB","COF","CAH","KMX","CCL","CARR","CTLT","CAT","CBOE","CBRE","CDW","CE",
+    "COR","CNC","CNP","CF","CHRW","CRL","SCHW","CHTR","CVX","CMG","CB","CHD",
+    "CI","CINF","CTAS","CSCO","C","CFG","CLX","CME","CMS","KO","CTSH","CL",
+    "CMCSA","CAG","COP","ED","STZ","CEG","COO","CPRT","GLW","CPAY","CTVA",
+    "CSGP","COST","CTRA","CRWD","CCI","CSX","CMI","CVS","DHR","DRI","DVA",
+    "DAY","DECK","DE","DAL","DVN","DXCM","FANG","DLR","DFS","DG","DLTR","D",
+    "DPZ","DOV","DOW","DHI","DTE","DUK","DD","EMN","ETN","EBAY","ECL","EIX",
+    "EW","EA","ELV","EMR","ENPH","ETR","EOG","EPAM","EQT","EFX","EQIX","EQR",
+    "ERIE","ESS","EL","ETSY","EG","EVRG","ES","EXC","EXPE","EXPD","EXR","XOM",
+    "FFIV","FDS","FICO","FAST","FRT","FDX","FIS","FITB","FSLR","FE","FI",
+    "FMC","F","FTNT","FTV","FOXA","FOX","BEN","FCX","GRMN","IT","GE","GEHC",
+    "GEN","GNRC","GD","GIS","GM","GPC","GILD","GPN","GL","GDDY","GS","HAL",
+    "HIG","HAS","HCA","DOC","HSIC","HSY","HES","HPE","HLT","HOLX","HD","HON",
+    "HRL","HST","HWM","HPQ","HUBB","HUM","HBAN","HII","IBM","IEX","IDXX","ITW",
+    "ILMN","INCY","IR","PODD","INTC","ICE","IFF","IP","IPG","INTU","ISRG","IVZ",
+    "INVH","IQV","IRM","JBHT","JBL","JKHY","J","JNJ","JCI","JPM","JNPR","K",
+    "KVUE","KDP","KEY","KEYS","KMB","KIM","KMI","KKR","KLAC","KHC","KR","LHX",
+    "LH","LRCX","LW","LVS","LDOS","LEN","LLY","LIN","LYV","LKQ","LMT","L",
+    "LOW","LULU","LYB","MTB","MRO","MPC","MKTX","MAR","MMC","MLM","MAS","MA",
+    "MTCH","MKC","MCD","MCK","MDT","MRK","META","MCHP","MU","MSFT","MAA","MRNA",
+    "MHK","MOH","TAP","MDLZ","MPWR","MNST","MCO","MS","MOS","MSI","MSCI","NDAQ",
+    "NTAP","NFLX","NEM","NWSA","NWS","NEE","NKE","NI","NDSN","NSC","NTRS","NOC",
+    "NCLH","NRG","NUE","NVDA","NVR","NXPI","ORLY","OXY","ODFL","OMC","ON","OKE",
+    "ORCL","OTIS","PCAR","PKG","PANW","PARA","PH","PAYX","PAYC","PYPL","PNR",
+    "PEP","PFE","PCG","PM","PSX","PNW","PXD","PNC","POOL","PPG","PPL","PFG",
+    "PG","PGR","PLD","PRU","PEG","PTC","PSA","PHM","QRVO","PWR","QCOM","DGX",
+    "RL","RJF","RTX","O","REG","REGN","RF","RSG","RMD","RVTY","RHI","ROK","ROL",
+    "ROP","ROST","RCL","SPGI","CRM","SBAC","SLB","STX","SRE","NOW","SHW","SPG",
+    "SWKS","SJM","SW","SNA","SOLV","SO","LUV","SWK","SBUX","STT","STLD","STE",
+    "SYK","SMCI","SYF","SNPS","SYY","TMUS","TROW","TTWO","TPR","TRGP","TGT",
+    "TEL","TDY","TFX","TER","TSLA","TXN","TXT","TMO","TJX","TSCO","TT","TDG",
+    "TRV","TRMB","TFC","TYL","TSN","USB","UBER","UDR","ULTA","UNP","UAL","UPS",
+    "URI","UNH","UHS","VLO","VTR","VLTO","VRSN","VRSK","VZ","VRTX","VTRS","VICI",
+    "V","VMC","WRB","GWW","WAB","WBA","WMT","DIS","WBD","WM","WAT","WEC","WFC",
+    "WELL","WST","WDC","WRK","WY","WMB","WTW","WYNN","XEL","XYL","YUM","ZBRA",
+    "ZBH","ZTS",
+]
+
 
 def _get_sp500_tickers():
-    """Return list of S&P 500 tickers (cached for 24 h)."""
-    import time
+    """Return list of S&P 500 tickers.
+    Tries Wikipedia first (via requests to bypass SSL issues),
+    falls back to the hardcoded list above.  Cached for 24 h.
+    """
     now = time.time()
     if _SP500_CACHE["tickers"] and _SP500_CACHE["ts"] and now - _SP500_CACHE["ts"] < 86400:
         return _SP500_CACHE["tickers"]
     try:
-        table = pd.read_html(
+        import requests
+        from io import StringIO
+        r = requests.get(
             "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
-            attrs={"id": "constituents"},
-        )[0]
+            headers={"User-Agent": "stock-dashboard/1.0"},
+            verify=False, timeout=10,
+        )
+        r.raise_for_status()
+        tables = pd.read_html(StringIO(r.text), flavor="lxml")
+        table = next(t for t in tables if "Symbol" in t.columns)
         ticks = table["Symbol"].str.replace(".", "-", regex=False).tolist()
-        _SP500_CACHE["tickers"] = ticks
-        _SP500_CACHE["ts"] = now
-        return ticks
+        if len(ticks) > 400:   # sanity check
+            _SP500_CACHE["tickers"] = ticks
+            _SP500_CACHE["ts"] = now
+            return ticks
     except Exception:
-        return [
-            "AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "META", "TSLA", "BRK-B",
-            "UNH", "JNJ", "V", "XOM", "JPM", "PG", "MA", "HD", "CVX", "LLY",
-            "MRK", "ABBV", "PEP", "KO", "AVGO", "COST", "TMO", "MCD", "WMT",
-            "CSCO", "ACN", "ABT", "DHR", "NEE", "LIN", "PM", "TXN", "UPS",
-        ]
+        pass
+    # Fallback — hardcoded full list
+    _SP500_CACHE["tickers"] = list(_SP500_HARDCODED)
+    _SP500_CACHE["ts"] = now
+    return _SP500_CACHE["tickers"]
 
 
-def fetch_sp500_movers(n=10):
-    """Return (gainers_df, losers_df) — top n S&P 500 gainers and losers."""
-    tickers = _get_sp500_tickers()
-    try:
-        df = yf.download(tickers, period="2d", group_by="ticker",
-                         threads=True, progress=False)
-    except Exception:
+# ─────────────────────────────────────────────────────────────────────────────
+# Generic movers engine — shared by S&P 500 / FTSE 100 / Euro Stoxx 50
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _fetch_movers_generic(tickers, n, cache_key, prefix="$"):
+    """Download daily + intraday data for a ticker list, return (gainers, losers).
+    Uses parallel bulk downloads and persists results to disk."""
+
+    def _dl_daily():
+        try:
+            return yf.download(tickers, period="5d", interval="1d",
+                               group_by="ticker", threads=True, progress=False)
+        except Exception:
+            return None
+
+    def _dl_intra():
+        try:
+            return yf.download(tickers, period="1d", interval="5m",
+                               group_by="ticker", threads=True, progress=False)
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_daily = pool.submit(_dl_daily)
+        fut_intra = pool.submit(_dl_intra)
+    daily = fut_daily.result()
+    intra = fut_intra.result()
+
+    if daily is None or daily.empty:
         return pd.DataFrame(), pd.DataFrame()
+
+    has_intraday = (intra is not None and not intra.empty)
+
     rows = []
     for t in tickers:
         try:
-            close = df[t]["Close"].dropna()
-            if len(close) < 2:
+            d_close = daily[t]["Close"].dropna()
+            if len(d_close) < 2:
                 continue
-            prev, last = float(close.iloc[-2]), float(close.iloc[-1])
-            chg = last - prev
-            pct = (chg / prev) * 100 if prev else 0
-            rows.append({"Ticker": t, "Price": f"${last:,.2f}",
-                         "Chg %": f"{'+' if pct >= 0 else ''}{pct:.2f}%",
+
+            if has_intraday:
+                prev = float(d_close.iloc[-2])
+                live = None
+                try:
+                    i_close = intra[t]["Close"].dropna()
+                    if not i_close.empty:
+                        live = float(i_close.iloc[-1])
+                except Exception:
+                    pass
+                if live is None:
+                    live = float(d_close.iloc[-1])
+            else:
+                prev = float(d_close.iloc[-2])
+                live = float(d_close.iloc[-1])
+
+            if prev == 0:
+                continue
+
+            pct = (live / prev - 1) * 100
+            rows.append({"Ticker": t, "Price": f"{prefix}{live:,.2f}",
+                         "Chg %": f"{'+'if pct >= 0 else ''}{pct:.2f}%",
                          "_chg": pct})
         except Exception:
             continue
+
     if not rows:
         return pd.DataFrame(), pd.DataFrame()
     result = pd.DataFrame(rows).sort_values("_chg", ascending=False)
     gainers = result.head(n).reset_index(drop=True)
     losers = result.tail(n).sort_values("_chg").reset_index(drop=True)
+
+    try:
+        _disk_save(f"{cache_key}_{n}", {
+            "gainers": gainers.to_dict(orient="records"),
+            "losers":  losers.to_dict(orient="records"),
+        })
+    except Exception:
+        pass
+
     return gainers, losers
 
 
+def _fetch_movers_cached(cache_key, n, impl_fn):
+    """Generic cached movers: in-memory → disk → fresh fetch."""
+    key = f"{cache_key}_{n}"
+
+    # 1. In-memory cache (15-min TTL)
+    entry = _CACHE.get(key)
+    if entry and (time.time() - entry["ts"]) < 900:
+        return entry["val"]
+
+    # 2. Disk cache (up to 24h old — serve immediately, refresh in background)
+    disk = _disk_load(key, max_age=86400)
+    if disk:
+        gainers = pd.DataFrame(disk["gainers"])
+        losers  = pd.DataFrame(disk["losers"])
+        _CACHE[key] = {"val": (gainers, losers), "ts": time.time() - 600}
+        threading.Thread(
+            target=lambda: _cached(key, 900, impl_fn, n),
+            daemon=True,
+        ).start()
+        return gainers, losers
+
+    # 3. Cold start
+    return _cached(key, 900, impl_fn, n)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S&P 500 movers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _fetch_sp500_movers_impl(n=10):
+    """S&P 500 gainers & losers."""
+    return _fetch_movers_generic(_get_sp500_tickers(), n, "sp500_movers")
+
+
+def fetch_sp500_movers(n=10):
+    """S&P 500 movers with disk cache + background refresh."""
+    return _fetch_movers_cached("sp500_movers", n, _fetch_sp500_movers_impl)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FTSE 100 movers
+# ─────────────────────────────────────────────────────────────────────────────
+
+_FTSE100 = [
+    "AAF.L","AAL.L","ABF.L","ADM.L","AHT.L","ANTO.L","AUTO.L","AV.L","AZN.L",
+    "BA.L","BARC.L","BATS.L","BDEV.L","BEZ.L","BKG.L","BME.L","BNZL.L","BP.L",
+    "BRBY.L","BT-A.L","CCH.L","CNA.L","CPG.L","CRDA.L","CRH.L","CTEC.L",
+    "DARK.L","DCC.L","DGE.L","DPH.L","EDV.L","ENT.L","EXPN.L","EZJ.L","FCIT.L",
+    "FLTR.L","FRAS.L","FRES.L","GLEN.L","GSK.L","HIK.L","HLMA.L","HLN.L",
+    "HSBA.L","IAG.L","ICG.L","IHG.L","III.L","IMB.L","INF.L","ITRK.L","JD.L",
+    "KGF.L","LAND.L","LGEN.L","LLOY.L","LSEG.L","MKS.L","MNDI.L","MNG.L",
+    "MRO.L","NG.L","NWG.L","NXT.L","PHNX.L","PRU.L","PSH.L","PSN.L","PSON.L",
+    "REL.L","RIO.L","RKT.L","RMV.L","RR.L","RTO.L","SBRY.L","SDR.L","SGE.L",
+    "SGRO.L","SHEL.L","SKG.L","SMDS.L","SMIN.L","SMT.L","SN.L","SPX.L",
+    "SSE.L","STAN.L","SVT.L","TSCO.L","TW.L","ULVR.L","UTG.L","UU.L","VOD.L",
+    "VTY.L","WEIR.L","WPP.L","WTB.L",
+]
+
+
+def _fetch_ftse100_movers_impl(n=10):
+    return _fetch_movers_generic(_FTSE100, n, "ftse100_movers", prefix="£")
+
+
+def fetch_ftse100_movers(n=10):
+    """FTSE 100 movers with disk cache + background refresh."""
+    return _fetch_movers_cached("ftse100_movers", n, _fetch_ftse100_movers_impl)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Euro Stoxx 50 movers
+# ─────────────────────────────────────────────────────────────────────────────
+
+_EUROSTOXX50 = [
+    "ABI.BR","AD.AS","ADY.DE","AI.PA","AIR.PA","ALV.DE","ASML.AS","AXA.PA",
+    "BAS.DE","BAYN.DE","BBVA.MC","BMW.DE","BN.PA","BNP.PA","CRG.IR","CS.PA",
+    "DHL.DE","DTE.DE","ENEL.MI","ENGI.PA","ENI.MI","EL.PA","FLO.MC","GLE.PA",
+    "IBE.MC","IFX.DE","ISP.MI","ITX.MC","KER.PA","KN.PA","LIN.DE","MC.PA",
+    "MBG.DE","MRK.DE","MUV2.DE","NOKIA.HE","OR.PA","ORA.PA","PHIA.AS",
+    "RMS.PA","SAF.PA","SAN.PA","SAN.MC","SAP.DE","SIE.DE","SU.PA","TTE.PA",
+    "UCG.MI","UMG.AS","VOW3.DE",
+]
+
+
+def _fetch_eurostoxx_movers_impl(n=10):
+    return _fetch_movers_generic(_EUROSTOXX50, n, "eurostoxx_movers", prefix="€")
+
+
+def fetch_eurostoxx_movers(n=10):
+    """Euro Stoxx 50 movers with disk cache + background refresh."""
+    return _fetch_movers_cached("eurostoxx_movers", n, _fetch_eurostoxx_movers_impl)
+
+
+# ── Pre-warm: kick off background fetches on import ─────────────────────────
+for _warm_fn in (fetch_sp500_movers, fetch_ftse100_movers, fetch_eurostoxx_movers):
+    threading.Thread(target=lambda fn=_warm_fn: fn(10), daemon=True).start()
+
+
 def fetch_index_data():
-    results = []
-    for name, sym in INDICES.items():
+    """Fetch index data in parallel (was serial)."""
+    def _one(name, sym):
         try:
             fi  = yf.Ticker(sym).fast_info
             p   = fi.last_price
             prv = fi.previous_close
             chg = p - prv
             pct = (chg / prv) * 100 if prv else 0
-            results.append({"name": name, "symbol": sym, "price": p, "chg": chg, "pct": pct})
+            return {"name": name, "symbol": sym, "price": p, "chg": chg, "pct": pct}
         except Exception:
-            results.append({"name": name, "symbol": sym, "price": None, "chg": 0, "pct": 0})
+            return {"name": name, "symbol": sym, "price": None, "chg": 0, "pct": 0}
+
+    results = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futs = {pool.submit(_one, n, s): n for n, s in INDICES.items()}
+        for f in as_completed(futs):
+            results.append(f.result())
+    # Preserve original order
+    order = {n: i for i, n in enumerate(INDICES)}
+    results.sort(key=lambda r: order.get(r["name"], 999))
     return results
 
 
@@ -169,7 +438,6 @@ def fetch_news(tickers, max_per=3):
     Fetch news from multiple RSS sources in parallel.
     Returns a dict: {"stock": [...], "general": [...], "all": [...]}.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     seen_titles = set()
     stock_articles = []
@@ -261,7 +529,7 @@ def run_screener(extra_tickers=None):
         return f"{sign}{float(v) * 100:.2f}%"
 
     rows = []
-    for ticker in universe:
+    def _scan_one(ticker):
         try:
             t = yf.Ticker(ticker)
             info = t.info or {}
@@ -280,7 +548,7 @@ def run_screener(extra_tickers=None):
             debt_equity = info.get("debtToEquity")
             chg_52w = info.get("52WeekChange")
 
-            rows.append({
+            return {
                 "Ticker": ticker,
                 "Name": info.get("shortName") or info.get("longName") or ticker,
                 "Sector": info.get("sector") or "Unknown",
@@ -298,9 +566,14 @@ def run_screener(extra_tickers=None):
                 "Profit Margin Raw": profit_margin,
                 "Rev Growth Raw": rev_growth,
                 "Div Yield Raw": div_yield,
-            })
+            }
         except Exception:
-            continue
+            return None
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        for result in pool.map(_scan_one, universe):
+            if result:
+                rows.append(result)
 
     return pd.DataFrame(rows)
 
@@ -902,7 +1175,6 @@ def index_card(name, price, chg, pct, c=None):
 def fetch_quote_table(pairs_dict):
     """Fetch price + daily change for a dict of {label: yf_symbol}.
     Returns list of dicts: [{name, price, chg, pct}, ...]."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     def _one(name, sym):
         try:

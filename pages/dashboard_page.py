@@ -45,7 +45,7 @@ def build_dashboard_section(LBL, PANEL):
                     html.Div(id="commodity-table"),
                 ], style=BP, className="theme-panel"),
 
-            ], style={"width": "220px", "flexShrink": "0"}),
+            ], style={"width": "270px", "flexShrink": "0", "overflow": "hidden"}),
 
             # ── CENTER COLUMN ────────────────────────────────────────────
             html.Div([
@@ -110,6 +110,34 @@ def build_dashboard_section(LBL, PANEL):
                 html.Div([
                     html.Div("S&P 500 Top Losers", style=LBL, className="theme-label"),
                     html.Div(id="top-losers-table"),
+                ], style=BP, className="theme-panel"),
+
+                # FTSE 100 gainers
+                html.Div([
+                    html.Div("FTSE 100 Top Gainers", style=LBL, className="theme-label"),
+                    html.Div(id="ftse-gainers-table",
+                             style={"maxHeight": "220px", "overflowY": "auto"}),
+                ], style=BP, className="theme-panel"),
+
+                # FTSE 100 losers
+                html.Div([
+                    html.Div("FTSE 100 Top Losers", style=LBL, className="theme-label"),
+                    html.Div(id="ftse-losers-table",
+                             style={"maxHeight": "220px", "overflowY": "auto"}),
+                ], style=BP, className="theme-panel"),
+
+                # Euro Stoxx 50 gainers
+                html.Div([
+                    html.Div("Euro Stoxx 50 Top Gainers", style=LBL, className="theme-label"),
+                    html.Div(id="euro-gainers-table",
+                             style={"maxHeight": "220px", "overflowY": "auto"}),
+                ], style=BP, className="theme-panel"),
+
+                # Euro Stoxx 50 losers
+                html.Div([
+                    html.Div("Euro Stoxx 50 Top Losers", style=LBL, className="theme-label"),
+                    html.Div(id="euro-losers-table",
+                             style={"maxHeight": "220px", "overflowY": "auto"}),
                 ], style=BP, className="theme-panel"),
 
             ], style={"width": "280px", "flexShrink": "0"}),

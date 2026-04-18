@@ -1,6 +1,8 @@
 """Callback — Bloomberg-style dashboard home page."""
 
 import datetime
+from concurrent.futures import ThreadPoolExecutor
+
 import dash
 import numpy as np
 import plotly.graph_objects as go
@@ -16,6 +18,7 @@ from data import (
     fetch_quote_table, fetch_sector_performance,
     fetch_chart_data, fetch_portfolio_history,
     fetch_news, fetch_sp500_movers,
+    fetch_ftse100_movers, fetch_eurostoxx_movers,
 )
 
 
@@ -116,6 +119,10 @@ def register_callbacks(app):
         Output("sector-treemap",       "figure"),
         Output("top-gainers-table",    "children"),
         Output("top-losers-table",     "children"),
+        Output("ftse-gainers-table",   "children"),
+        Output("ftse-losers-table",    "children"),
+        Output("euro-gainers-table",   "children"),
+        Output("euro-losers-table",    "children"),
         Output("last-updated",         "children"),
         Input("refresh-btn",   "n_clicks"),
         Input("auto-refresh",  "n_intervals"),
@@ -127,24 +134,39 @@ def register_callbacks(app):
         now = datetime.datetime.now().strftime("%d %b %Y %H:%M")
         tickers = parse_tickers(raw)
 
+        # ── Fire ALL data fetches concurrently ─────────────────────────
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            fut_idx   = pool.submit(fetch_index_data)
+            fut_fx    = pool.submit(fetch_quote_table, FX_PAIRS)
+            fut_bond  = pool.submit(fetch_quote_table, BONDS)
+            fut_comm  = pool.submit(fetch_quote_table, COMMODITIES)
+            fut_sect  = pool.submit(fetch_sector_performance)
+            fut_mov   = pool.submit(fetch_sp500_movers, 10)
+            fut_ftse  = pool.submit(fetch_ftse100_movers, 10)
+            fut_euro  = pool.submit(fetch_eurostoxx_movers, 10)
+
+        idx_data    = fut_idx.result()
+        fx_data     = fut_fx.result()
+        bond_data   = fut_bond.result()
+        comm_data   = fut_comm.result()
+        sector_data = fut_sect.result()
+        gainers_df, losers_df = fut_mov.result()
+        ftse_g, ftse_l = fut_ftse.result()
+        euro_g, euro_l = fut_euro.result()
+
         # ── Index strip ──────────────────────────────────────────────────
-        idx_data = fetch_index_data()
         idx_chips = [_index_chip(d["name"], d["price"], d["chg"], d["pct"], c,
                                   symbol=d.get("symbol", ""))
                      for d in idx_data]
 
         # ── Left column tables ───────────────────────────────────────────
-        fx_data = fetch_quote_table(FX_PAIRS)
         fx_content = _mini_table(fx_data, c, decimals=4, show_pct=True)
 
-        bond_data = fetch_quote_table(BONDS)
         bond_content = _mini_table(bond_data, c, decimals=3, show_pct=True)
 
-        comm_data = fetch_quote_table(COMMODITIES)
         comm_content = _mini_table(comm_data, c, decimals=2, show_pct=True)
 
         # ── Sector treemap ───────────────────────────────────────────────
-        sector_data = fetch_sector_performance()
         sect_names = [s["name"] for s in sector_data]
         sect_pcts = [s["pct"] for s in sector_data]
         sect_abs = [abs(p) + 0.3 for p in sect_pcts]  # sizing (min size)
@@ -168,7 +190,6 @@ def register_callbacks(app):
         )
 
         # ── Top movers (S&P 500) ──────────────────────────────────────
-        gainers_df, losers_df = fetch_sp500_movers(n=10)
 
         def _build_movers_table(df):
             if df.empty:
@@ -200,10 +221,17 @@ def register_callbacks(app):
 
         gainers_content = _build_movers_table(gainers_df)
         losers_content = _build_movers_table(losers_df)
+        ftse_g_content = _build_movers_table(ftse_g)
+        ftse_l_content = _build_movers_table(ftse_l)
+        euro_g_content = _build_movers_table(euro_g)
+        euro_l_content = _build_movers_table(euro_l)
 
         return (idx_chips, fx_content, bond_content, comm_content,
                 tree_fig,
-                gainers_content, losers_content, f"Updated {now}")
+                gainers_content, losers_content,
+                ftse_g_content, ftse_l_content,
+                euro_g_content, euro_l_content,
+                f"Updated {now}")
 
     # ══════════════════════════════════════════════════════════════════════
     # 2) Main chart — reacts to ticker input + frequency dropdown
@@ -229,13 +257,27 @@ def register_callbacks(app):
 
         sp_df = fetch_chart_data(symbol=symbol, period=period, interval=interval)
         if not sp_df.empty:
-            date_col = next((c for c in sp_df.columns if c in ("Datetime", "Date")), sp_df.columns[0])
-            sp_fig = go.Figure(go.Candlestick(
-                x=sp_df[date_col], open=sp_df["Open"], high=sp_df["High"],
-                low=sp_df["Low"], close=sp_df["Close"],
-                increasing_line_color=c["green"], decreasing_line_color=c["red"],
-            ))
+            date_col = next((col for col in sp_df.columns if col in ("Datetime", "Date")), sp_df.columns[0])
             last_p = sp_df["Close"].iloc[-1]
+            first_p = sp_df["Close"].iloc[0]
+            line_col = c["green"] if last_p >= first_p else c["red"]
+            rgb = "63,185,80" if last_p >= first_p else "248,81,73"
+            sp_fig = go.Figure()
+            # Invisible baseline so fill stays within the data range
+            sp_fig.add_trace(go.Scatter(
+                x=sp_df[date_col], y=[sp_df["Close"].min()] * len(sp_df),
+                mode="lines", line=dict(width=0), showlegend=False,
+                hoverinfo="skip",
+            ))
+            sp_fig.add_trace(go.Scatter(
+                x=sp_df[date_col], y=sp_df["Close"],
+                mode="lines",
+                line=dict(color=line_col, width=1.8),
+                fill="tonexty",
+                fillcolor=f"rgba({rgb},0.10)",
+                hovertemplate="%{y:,.2f}<extra></extra>",
+                showlegend=False,
+            ))
             sp_price_text = f"{symbol}  {last_p:,.2f}"
         else:
             sp_fig = go.Figure()

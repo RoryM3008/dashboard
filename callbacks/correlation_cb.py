@@ -3,6 +3,7 @@
 import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
+from concurrent.futures import ThreadPoolExecutor
 from dash import dcc, html, Input, Output, State, no_update
 
 from theme import FONT, get_theme
@@ -34,9 +35,10 @@ def register_callbacks(app):
             if active.empty:
                 return no_update, "No active holdings."
             yf_tickers = []
-            for t in active["ticker"]:
-                yf_t, _ = _resolve_ticker(t)
-                yf_tickers.append(yf_t)
+            ticker_list = active["ticker"].tolist()
+            with ThreadPoolExecutor(max_workers=10) as pool:
+                yf_tickers = list(pool.map(
+                    lambda t: _resolve_ticker(t)[0], ticker_list))
             tickers_str = ", ".join(yf_tickers)
             return tickers_str, f"Loaded {len(yf_tickers)} holdings."
         except Exception as exc:

@@ -1,6 +1,7 @@
 """Callback — Watchlist: persistent add/remove + conditional-formatted returns."""
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 import dash
 import yfinance as yf
@@ -11,7 +12,7 @@ from data import parse_tickers
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Data fetcher (unchanged logic, called only for the full ticker list)
+# Data fetcher (parallelised — each ticker processed in its own thread)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _fetch_watchlist_data(tickers):
@@ -25,8 +26,8 @@ def _fetch_watchlist_data(tickers):
         "1Y":  "1y",
         "2Y":  "2y",
     }
-    rows = []
-    for ticker in tickers:
+
+    def _one(ticker):
         try:
             t = yf.Ticker(ticker)
             info = t.info or {}
@@ -69,12 +70,15 @@ def _fetch_watchlist_data(tickers):
                 except Exception:
                     row[label] = None
 
-            rows.append(row)
+            return row
         except Exception:
-            rows.append({"Ticker": ticker, "Price": None, "Ccy": "",
-                         "EV/Sales": None, "P/E": None,
-                         "Mkt Cap": "—",
-                         **{lbl: None for lbl in period_map}})
+            return {"Ticker": ticker, "Price": None, "Ccy": "",
+                    "EV/Sales": None, "P/E": None,
+                    "Mkt Cap": "—",
+                    **{lbl: None for lbl in period_map}}
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        rows = list(pool.map(_one, tickers))
     return rows
 
 

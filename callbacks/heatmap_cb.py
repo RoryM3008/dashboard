@@ -3,6 +3,7 @@
 import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
+from concurrent.futures import ThreadPoolExecutor
 from dash import dcc, html, Input, Output, State, no_update
 
 from theme import FONT, get_theme
@@ -42,9 +43,15 @@ def register_callbacks(app):
             # equity-only weight (% of securities only, excl. cash)
             total_mv = summary.get("total_mv", 0) or 1
 
+            # Resolve all tickers in parallel
+            ticker_list = active["ticker"].tolist()
+            with ThreadPoolExecutor(max_workers=10) as pool:
+                yf_map = dict(pool.map(
+                    lambda t: (t, _resolve_ticker(t)[0]), ticker_list))
+
             rows = []
             for _, r in active.iterrows():
-                yf_t, _ = _resolve_ticker(r["ticker"])
+                yf_t = yf_map.get(r["ticker"], r["ticker"])
                 mv = float(r.get("market_value", 0) or 0)
                 rows.append({
                     "ticker": r["ticker"],
