@@ -64,6 +64,7 @@ def build_spread_section(LBL, PANEL, C, FONT):
                         {"label": "A − B", "value": "diff"},
                         {"label": "A / B", "value": "ratio"},
                         {"label": "Z-Score", "value": "zscore"},
+                        {"label": "Indexed", "value": "indexed"},
                     ], value="diff", clearable=False,
                     style={"width": "95px", "fontSize": "0.76rem"}),
                 ]),
@@ -77,9 +78,25 @@ def build_spread_section(LBL, PANEL, C, FONT):
                         {"label": "3Y", "value": "3y"},
                         {"label": "5Y", "value": "5y"},
                         {"label": "MAX", "value": "max"},
+                        {"label": "Custom", "value": "custom"},
                     ], value="2y", clearable=False,
-                    style={"width": "75px", "fontSize": "0.76rem"}),
+                    style={"width": "85px", "fontSize": "0.76rem"}),
                 ]),
+                # Custom date range (hidden until "Custom" selected)
+                html.Div([
+                    html.Div("FROM", style=_lbl),
+                    dcc.DatePickerSingle(id="spread-date-start",
+                        placeholder="Start",
+                        style={"fontSize": "0.74rem"}),
+                ], id="spread-date-start-wrap",
+                   style={"display": "none"}),
+                html.Div([
+                    html.Div("TO", style=_lbl),
+                    dcc.DatePickerSingle(id="spread-date-end",
+                        placeholder="End",
+                        style={"fontSize": "0.74rem"}),
+                ], id="spread-date-end-wrap",
+                   style={"display": "none"}),
                 # Frequency
                 html.Div([
                     html.Div("FREQ", style=_lbl),
@@ -126,6 +143,7 @@ def build_spread_section(LBL, PANEL, C, FONT):
                 html.Div([
                     html.Div(id="spread-price-chart"),
                     html.Div(id="spread-series-chart"),
+                    html.Div(id="spread-relative-chart"),
                 ], style={
                     "flex": "7", "minWidth": "400px",
                     "display": "flex", "flexDirection": "column",

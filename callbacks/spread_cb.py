@@ -23,9 +23,13 @@ _AMBER = "#ff8c00"
 _AMBER_LT = "rgba(255,140,0,{a})"
 
 
-def _download(ticker: str, period: str, freq: str) -> pd.Series:
+def _download(ticker: str, period: str, freq: str,
+              start=None, end=None) -> pd.Series:
     tk = yf.Ticker(ticker.strip().upper())
-    df = tk.history(period=period, auto_adjust=True)
+    if period == "custom" and start:
+        df = tk.history(start=start, end=end, auto_adjust=True)
+    else:
+        df = tk.history(period=period, auto_adjust=True)
     if df.empty:
         return pd.Series(dtype=float)
     s = df["Close"]
@@ -38,7 +42,7 @@ def _download(ticker: str, period: str, freq: str) -> pd.Series:
 
 def _base_layout(c, font, height, margin=None):
     """Minimal Bloomberg-style chart layout."""
-    m = margin or dict(l=48, r=12, t=24, b=24)
+    m = margin or dict(l=48, r=48, t=24, b=24)
     return dict(
         template="plotly_dark",
         paper_bgcolor="rgba(0,0,0,0)",
@@ -49,10 +53,13 @@ def _base_layout(c, font, height, margin=None):
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left",
                     x=0, font=dict(size=9)),
         hovermode="x unified",
+        hoverlabel=dict(bgcolor="rgba(30,30,50,0.9)", font_size=10,
+                        font_family=font, font_color="#eee",
+                        bordercolor="rgba(255,255,255,0.15)"),
         xaxis=dict(gridcolor=_GRID, zeroline=False, showgrid=True,
-                   tickfont=dict(size=9)),
+                   tickfont=dict(size=9), autorange=True),
         yaxis=dict(gridcolor=_GRID, zeroline=False, showgrid=True,
-                   tickfont=dict(size=9)),
+                   tickfont=dict(size=9), autorange=True),
     )
 
 
@@ -60,11 +67,22 @@ def _base_layout(c, font, height, margin=None):
 
 def register_callbacks(app):
 
+    # ── Show / hide custom date pickers ──────────────────────────────────
+    @app.callback(
+        Output("spread-date-start-wrap", "style"),
+        Output("spread-date-end-wrap", "style"),
+        Input("spread-history", "value"),
+    )
+    def toggle_custom_dates(period):
+        show = {"display": "block"} if period == "custom" else {"display": "none"}
+        return show, show
+
     @app.callback(
         Output("spread-price-chart", "children"),
         Output("spread-series-chart", "children"),
         Output("spread-stats-table", "children"),
         Output("spread-histogram", "children"),
+        Output("spread-relative-chart", "children"),
         Output("spread-status", "children"),
         Input("spread-run", "n_clicks"),
         State("spread-leg-a", "value"),
@@ -75,19 +93,21 @@ def register_callbacks(app):
         State("spread-history", "value"),
         State("spread-freq", "value"),
         State("spread-zscore-window", "value"),
+        State("spread-date-start", "date"),
+        State("spread-date-end", "date"),
         State("theme-store", "data"),
     )
     def run_spread(n_clicks, leg_a, mult_a, leg_b, mult_b, stype, period,
-                   freq, z_win, theme_mode):
+                   freq, z_win, date_start, date_end, theme_mode):
         if not n_clicks:
-            return no_update, no_update, no_update, no_update, ""
+            return no_update, no_update, no_update, no_update, no_update, ""
 
         c = get_theme(theme_mode or "dark")
         font = "Nunito Sans, sans-serif"
 
         # ── validate ─────────────────────────────────────────────────────
         if not leg_a or not leg_b:
-            return no_update, no_update, no_update, no_update, \
+            return no_update, no_update, no_update, no_update, no_update, \
                 "⚠  Enter both Asset A and Asset B tickers."
         mult_a = float(mult_a or 1)
         mult_b = float(mult_b or 1)
@@ -95,20 +115,25 @@ def register_callbacks(app):
         leg_a  = leg_a.strip().upper()
         leg_b  = leg_b.strip().upper()
 
+        # ── validate custom dates ────────────────────────────────────────
+        if period == "custom" and not date_start:
+            return no_update, no_update, no_update, no_update, no_update, \
+                "⚠  Select a start date for custom period."
+
         # ── download + align ─────────────────────────────────────────────
         try:
-            pa = _download(leg_a, period, freq)
-            pb = _download(leg_b, period, freq)
+            pa = _download(leg_a, period, freq, start=date_start, end=date_end)
+            pb = _download(leg_b, period, freq, start=date_start, end=date_end)
         except Exception as e:
-            return no_update, no_update, no_update, no_update, f"⚠  {e}"
+            return no_update, no_update, no_update, no_update, no_update, f"⚠  {e}"
 
         if pa.empty or pb.empty:
-            return no_update, no_update, no_update, no_update, \
+            return no_update, no_update, no_update, no_update, no_update, \
                 "⚠  No data for one or both tickers."
 
         df = pd.DataFrame({"A": pa, "B": pb}).dropna()
         if len(df) < 10:
-            return no_update, no_update, no_update, no_update, \
+            return no_update, no_update, no_update, no_update, no_update, \
                 f"⚠  Only {len(df)} overlapping obs — need ≥ 10."
 
         # ── compute spread ───────────────────────────────────────────────
@@ -118,6 +143,12 @@ def register_callbacks(app):
         if stype == "ratio":
             spread = a_w / b_w
             sp_lbl = f"{leg_a}/{leg_b}"
+        elif stype == "indexed":
+            # Rebase both to 100 at start; spread = difference of indexed
+            idx_a = (a_w / a_w.iloc[0]) * 100
+            idx_b = (b_w / b_w.iloc[0]) * 100
+            spread = idx_a - idx_b
+            sp_lbl = f"{leg_a} vs {leg_b} (indexed)"
         else:
             spread = a_w - b_w
             sp_lbl = f"{leg_a}−{leg_b}"
@@ -142,36 +173,70 @@ def register_callbacks(app):
         # chart heights — split viewport (minus control bar ~90px)
         ch_h = "calc((100vh - 290px) / 2)"
         px_h = 280   # plotly needs a numeric fallback
-        gcfg = {"displayModeBar": False}
+        gcfg = {"displayModeBar": True,
+                "modeBarButtonsToRemove": ["select2d", "lasso2d",
+                    "zoomIn2d", "zoomOut2d", "pan2d", "toImage"],
+                "displaylogo": False}
 
         # ─────────────────────────────────────────────────────────────────
         # 1) PRICE OVERLAY (top-left)
         # ─────────────────────────────────────────────────────────────────
         fig_px = go.Figure(layout=_base_layout(c, font, px_h))
-        fig_px.update_layout(
-            yaxis=dict(title=leg_a, side="left", gridcolor=_GRID),
-            yaxis2=dict(overlaying="y", side="right", showgrid=False,
-                        zeroline=False, tickfont=dict(size=9)),
-        )
-        fig_px.add_trace(go.Scatter(
-            x=df.index, y=df["A"], name=leg_a, mode="lines",
-            line=dict(color="#00e676", width=1.3),
-        ))
-        fig_px.add_trace(go.Scatter(
-            x=df.index, y=df["B"], name=leg_b, mode="lines",
-            line=dict(color="#ff5252", width=1.3), yaxis="y2",
-        ))
-        # last-price annotations at right edge
-        for val, clr, nm, ya in [
-            (df["A"].iloc[-1], "#00e676", leg_a, "y"),
-            (df["B"].iloc[-1], "#ff5252", leg_b, "y2"),
-        ]:
-            fig_px.add_annotation(
-                x=df.index[-1], y=val, yref=ya,
-                text=f" {val:,.2f}", showarrow=False,
-                font=dict(color=clr, size=10, family="Consolas"),
-                xanchor="left", bgcolor="rgba(0,0,0,0.6)",
+
+        if stype == "indexed":
+            # Indexed performance: both rebased to 100
+            idx_a = (df["A"] / df["A"].iloc[0]) * 100
+            idx_b = (df["B"] / df["B"].iloc[0]) * 100
+            fig_px.update_layout(
+                yaxis=dict(title="Indexed (100)", gridcolor=_GRID),
             )
+            fig_px.add_trace(go.Scatter(
+                x=df.index, y=idx_a, name=leg_a, mode="lines",
+                line=dict(color="#00e676", width=1.3),
+            ))
+            fig_px.add_trace(go.Scatter(
+                x=df.index, y=idx_b, name=leg_b, mode="lines",
+                line=dict(color="#ff5252", width=1.3),
+            ))
+            # last-value annotations
+            for val, clr, nm in [
+                (idx_a.iloc[-1], "#00e676", leg_a),
+                (idx_b.iloc[-1], "#ff5252", leg_b),
+            ]:
+                fig_px.add_annotation(
+                    x=df.index[-1], y=val,
+                    text=f" {val:,.1f}", showarrow=False,
+                    font=dict(color=clr, size=10, family="Consolas"),
+                    xanchor="left", bgcolor="rgba(0,0,0,0.6)",
+                )
+            # Base-100 reference line
+            fig_px.add_hline(y=100, line_dash="dot", line_width=0.8,
+                             line_color="rgba(255,255,255,0.3)")
+        else:
+            # Normal dual-axis price overlay
+            fig_px.update_layout(
+                yaxis=dict(title=leg_a, side="left", gridcolor=_GRID, autorange=True),
+                yaxis2=dict(overlaying="y", side="right", showgrid=False,
+                            zeroline=False, tickfont=dict(size=9), autorange=True),
+            )
+            fig_px.add_trace(go.Scatter(
+                x=df.index, y=df["A"], name=leg_a, mode="lines",
+                line=dict(color="#00e676", width=1.3),
+            ))
+            fig_px.add_trace(go.Scatter(
+                x=df.index, y=df["B"], name=leg_b, mode="lines",
+                line=dict(color="#ff5252", width=1.3), yaxis="y2",
+            ))
+            for val, clr, nm, ya in [
+                (df["A"].iloc[-1], "#00e676", leg_a, "y"),
+                (df["B"].iloc[-1], "#ff5252", leg_b, "y2"),
+            ]:
+                fig_px.add_annotation(
+                    x=df.index[-1], y=val, yref=ya,
+                    text=f" {val:,.2f}", showarrow=False,
+                    font=dict(color=clr, size=10, family="Consolas"),
+                    xanchor="left", bgcolor="rgba(0,0,0,0.6)",
+                )
 
         # ─────────────────────────────────────────────────────────────────
         # 2) SPREAD TIME SERIES (bottom-left)
@@ -211,8 +276,10 @@ def register_callbacks(app):
         # spread area (green fill, yellow line — 2-D area chart)
         fig_sp.add_trace(go.Scatter(
             x=ps.index, y=ps, name=sp_lbl, mode="lines",
-            line=dict(color="#ffeb3b", width=1.5),
-            fill="tozeroy", fillcolor="rgba(0,230,118,0.25)",
+            line=dict(color="#ffeb3b", width=1.5),  # keep yellow line
+            fill="tozeroy",
+            fillcolor="rgba(92, 127, 43, 0.45)",    # Bloomberg-style green
+
         ))
         # mean line
         fig_sp.add_hline(y=sp_m, line_dash="dash", line_width=1,
@@ -325,17 +392,48 @@ def register_callbacks(app):
                            annotation_position="top right",
                            annotation_font=dict(size=9, color="#00e676"))
 
+        # ─────────────────────────────────────────────────────────────────
+        # 5) RELATIVE RETURN CHART — long A / short B, rebased to 100
+        # ─────────────────────────────────────────────────────────────────
+        rel_return = (df["A"] / df["A"].iloc[0]) / (df["B"] / df["B"].iloc[0]) * 100
+        fig_rel = go.Figure(layout=_base_layout(c, font, px_h))
+        fig_rel.update_layout(yaxis_title="Long/Short Return (100)")
+
+        fig_rel.add_trace(go.Scatter(
+            x=rel_return.index, y=rel_return,
+            name=f"Long {leg_a} / Short {leg_b}",
+            mode="lines", line=dict(color="#42a5f5", width=1.5),
+            fill="tozeroy", fillcolor="rgba(66,165,245,0.12)",
+        ))
+        # 100 baseline
+        fig_rel.add_hline(y=100, line_dash="dot", line_width=0.8,
+                          line_color="rgba(255,255,255,0.35)")
+        # latest value annotation
+        last_rel = rel_return.iloc[-1]
+        rel_clr = "#00e676" if last_rel >= 100 else "#ff5252"
+        fig_rel.add_annotation(
+            x=rel_return.index[-1], y=last_rel,
+            text=f"  {last_rel:,.1f}  ({last_rel - 100:+.1f}%)",
+            showarrow=False,
+            font=dict(color=rel_clr, size=10, family="Consolas"),
+            xanchor="left", bgcolor="rgba(0,0,0,0.6)",
+        )
+
         # ── wrap in dcc.Graph ────────────────────────────────────────────
         gs = {"overflow": "hidden"}
+        ch_h3 = "calc((100vh - 290px) / 3)"  # split 3 charts
         price_chart  = dcc.Graph(figure=fig_px,   config=gcfg,
-                                 style={**gs, "height": ch_h})
+                                 style={**gs, "height": ch_h3})
         series_chart = dcc.Graph(figure=fig_sp,   config=gcfg,
-                                 style={**gs, "height": ch_h})
+                                 style={**gs, "height": ch_h3})
+        rel_chart    = dcc.Graph(figure=fig_rel,   config=gcfg,
+                                 style={**gs, "height": ch_h3})
         hist_chart   = dcc.Graph(figure=fig_hist,  config=gcfg,
                                  style={**gs, "height": ch_h})
 
         status = (f"{leg_a} vs {leg_b}  ·  {sp_lbl}  ·  "
                   f"{len(spread)} obs  ·  Z = {s_z:+.2f}  ·  "
-                  f"Pctile = {s_pct:.1f}%  ·  {freq.title()}")
+                  f"Pctile = {s_pct:.1f}%  ·  {freq.title()}  ·  "
+                  f"Rel Return = {last_rel - 100:+.1f}%")
 
-        return price_chart, series_chart, stat_table, hist_chart, status
+        return price_chart, series_chart, stat_table, hist_chart, rel_chart, status
