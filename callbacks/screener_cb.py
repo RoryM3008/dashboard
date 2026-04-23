@@ -183,22 +183,33 @@ def _render_uploaded_table(df, c):
 
     group_color_map = {key: palette[i % len(palette)] for i, key in enumerate(seen_multi_groups)}
 
-    header_conditional = []
+    # Build per-column styling — applies to both header and data cells
     cell_conditional = []
     for col in df.columns:
         key = _group_key(col)
-        # Only grouped metric columns get a colour; singletons stay neutral grey
+        colors = group_color_map.get(key, neutral)
+        cell_conditional.append({
+            "if": {"column_id": col},
+            "backgroundColor": colors["cell"],
+            "color": c["text"],
+        })
+
+    # Separate header colours (slightly darker than cells)
+    header_conditional = []
+    for col in df.columns:
+        key = _group_key(col)
         colors = group_color_map.get(key, neutral)
         header_conditional.append({
             "if": {"column_id": col},
             "backgroundColor": colors["header"],
             "color": c["text"],
         })
-        cell_conditional.append({
-            "if": {"column_id": col},
-            "backgroundColor": colors["cell"],
-            "color": c["text"],
-        })
+
+    # Debug: print group assignments so we can verify
+    for col in df.columns:
+        key = _group_key(col)
+        grp = "GROUPED" if key in group_color_map else "SINGULAR"
+        print(f"  [{grp}] '{col}' -> group key: '{key}'")
 
     return dash_table.DataTable(
         id="screener-upload-table",
@@ -206,9 +217,9 @@ def _render_uploaded_table(df, c):
         data=df.where(df.notna(), None).to_dict("records"),
         sort_action="native",
         filter_action="native",
-        page_action="native",
-        page_size=25,
-        style_table={"overflowX": "auto", "maxHeight": "520px", "overflowY": "auto"},
+        page_action="none",
+        style_table={"overflowX": "auto", "overflowY": "auto",
+                     "maxHeight": "calc(100vh - 220px)"},
         style_header={
             "padding": "0.38rem 0.6rem",
             "fontSize": "0.62rem",
@@ -218,8 +229,9 @@ def _render_uploaded_table(df, c):
             "whiteSpace": "nowrap",
             "borderBottom": "2px solid " + c["border"],
             "fontFamily": FONT,
-            "color": c["muted"],
-            "backgroundColor": c["panel"],
+            "position": "sticky",
+            "top": "0",
+            "zIndex": "1",
         },
         style_header_conditional=header_conditional,
         style_cell={
@@ -227,13 +239,13 @@ def _render_uploaded_table(df, c):
             "borderBottom": "1px solid " + c["border"],
             "fontSize": "0.78rem",
             "fontFamily": FONT,
-            "color": c["text"],
-            "backgroundColor": c["panel"],
             "textAlign": "left",
             "whiteSpace": "nowrap",
+            "minWidth": "80px",
         },
         style_data_conditional=cell_conditional,
         style_filter={"backgroundColor": c["bg"], "color": c["text"], "border": "none"},
+        css=[{"selector": ".dash-header", "rule": "position: sticky; top: 0; z-index: 1;"}],
     )
 
 

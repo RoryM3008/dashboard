@@ -748,13 +748,16 @@ def build_portfolio_performance_data(tickers, weights, frequency):
 
     weight_series = weight_series / weight_series.sum()
 
-    aligned_prices = price_df[weight_series.index].dropna(how="any")
+    aligned_prices = price_df[weight_series.index]
+    # Forward-fill gaps (missing prices carry forward last known price)
+    # then drop any leading rows that are still NaN
+    aligned_prices = aligned_prices.ffill().dropna(how="any")
     if aligned_prices.empty:
         return None, None, None
 
     rebased_components = aligned_prices.divide(aligned_prices.iloc[0]).mul(100)
     portfolio_index = rebased_components.mul(weight_series, axis=1).sum(axis=1)
-    return portfolio_index, rebased_components, weight_series
+    return portfolio_index, rebased_components, weight_series, aligned_prices
 
 
 # ─────────────────────────────────────────────────────────────────────────────

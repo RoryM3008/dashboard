@@ -70,6 +70,21 @@ def build_performance_section(LBL, PANEL, C, FONT):
                     ),
                 ]),
 
+                html.Div([
+                    html.Div("Benchmarks", style={**LBL, "marginBottom": "0.3rem"},
+                             className="theme-label"),
+                    dcc.Input(
+                        id="perf-benchmarks",
+                        type="text",
+                        placeholder="e.g. SPY, EFA, AGG",
+                        className="theme-input",
+                        style={"backgroundColor": C["bg"], "border": f"1px solid {C['border']}",
+                               "borderRadius": "8px", "color": C["text"],
+                               "padding": "0.5rem 0.9rem", "fontFamily": FONT,
+                               "fontSize": "0.82rem", "width": "220px", "outline": "none"},
+                    ),
+                ]),
+
                 html.Button("Calculate", id="perf-run", n_clicks=0, style={
                     "backgroundColor": C["accent"], "color": "#000", "border": "none",
                     "borderRadius": "8px", "padding": "0.55rem 1.5rem",
@@ -84,6 +99,18 @@ def build_performance_section(LBL, PANEL, C, FONT):
                             "fontFamily": FONT, "marginBottom": "0.65rem"},
                      className="theme-muted"),
             html.Div(id="perf-chart", style={"marginBottom": "0.9rem"}),
+            html.Div(id="perf-benchmark-chart", style={"marginBottom": "0.9rem"}),
             html.Div(id="perf-weights-table"),
+            html.Div([
+                html.Button("Export to Excel", id="perf-export-btn", n_clicks=0, style={
+                    "backgroundColor": C["panel"], "color": C["accent"],
+                    "border": f"1px solid {C['accent']}",
+                    "borderRadius": "6px", "padding": "0.4rem 1.2rem",
+                    "fontFamily": FONT, "fontWeight": "700", "fontSize": "0.78rem",
+                    "cursor": "pointer", "marginTop": "0.6rem",
+                }),
+                dcc.Download(id="perf-export-download"),
+                dcc.Store(id="perf-export-store"),
+            ]),
         ], style=PANEL, className="theme-panel"),
     ], id="section-performance", style={"display": "none"})
