@@ -4,3 +4,4 @@ plotly
 yfinance
 pandas
 feedparser
+openpyxl

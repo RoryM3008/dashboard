@@ -125,6 +125,27 @@ def build_screener_section(LBL, PANEL, C, FONT):
             ], style={"display": "flex", "gap": "0.75rem", "alignItems": "flex-end",
                       "marginBottom": "1rem", "flexWrap": "wrap"}),
 
+            html.Div([
+                dcc.Upload(
+                    id="screener-raw-upload",
+                    children=html.Button("Import Raw Screener (CSV/XLSX)", style={
+                        "backgroundColor": "transparent", "color": C["blue"],
+                        "border": f"1px solid {C['blue']}",
+                        "borderRadius": "8px", "padding": "0.45rem 1rem",
+                        "fontFamily": FONT, "fontWeight": "600", "fontSize": "0.78rem",
+                        "cursor": "pointer"
+                    }),
+                    multiple=False,
+                ),
+                html.Div(
+                    "Handles merged-style 2-row headers (e.g. Return on Equity (%) + 2025/26/27/28).",
+                    style={"color": C["muted"], "fontSize": "0.7rem", "fontFamily": FONT,
+                           "alignSelf": "center"},
+                    className="theme-muted",
+                ),
+            ], style={"display": "flex", "gap": "0.7rem", "alignItems": "center",
+                      "marginBottom": "0.7rem", "flexWrap": "wrap"}),
+
             html.Div(id="screener-status",
                      style={"color": C["muted"], "fontSize": "0.75rem",
                             "fontFamily": FONT, "marginBottom": "0.65rem"},
