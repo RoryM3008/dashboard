@@ -28,10 +28,17 @@ def register_callbacks(app):
         Input("menu-port", "n_clicks"),
         Input("menu-heatmap", "n_clicks"),
         Input("menu-spread", "n_clicks"),
+        Input("menu-ssa", "n_clicks"),
+        Input("menu-financials", "n_clicks"),
+        Input("menu-peers", "n_clicks"),
+        Input("menu-valuations", "n_clicks"),
+        Input("menu-fundamentals", "n_clicks"),
+        Input("menu-earnings", "n_clicks"),
+        Input("menu-calendar", "n_clicks"),
         State("menu-open", "data"),
     )
     def toggle_menu(n_toggle, n_backdrop,
-                    n1,n2,n3,n4,n5,n6,n7,n8,n9,n10,n11,n12,n13,
+                    n1,n2,n3,n4,n5,n6,n7,n8,n9,n10,n11,n12,n13,n14,n15,n16,n17,n18,n19,n20,
                     is_open):
         ctx = dash.callback_context
         if not ctx.triggered:
@@ -62,6 +69,13 @@ def register_callbacks(app):
         Output("menu-port", "style"),
         Output("menu-heatmap", "style"),
         Output("menu-spread", "style"),
+        Output("menu-ssa", "style"),
+        Output("menu-financials", "style"),
+        Output("menu-peers", "style"),
+        Output("menu-valuations", "style"),
+        Output("menu-fundamentals", "style"),
+        Output("menu-earnings", "style"),
+        Output("menu-calendar", "style"),
         Output("section-dashboard", "style"),
         Output("section-news", "style"),
         Output("section-analyser", "style"),
@@ -75,6 +89,12 @@ def register_callbacks(app):
         Output("section-port", "style"),
         Output("section-heatmap", "style"),
         Output("section-spread", "style"),
+        Output("section-ssa", "style"),
+        Output("section-peers", "style"),
+        Output("section-valuations", "style"),
+        Output("section-fundamentals", "style"),
+        Output("section-earnings", "style"),
+        Output("section-calendar", "style"),
         Output("active-main-menu", "data"),
         Input("menu-dashboard", "n_clicks"),
         Input("menu-news", "n_clicks"),
@@ -89,10 +109,20 @@ def register_callbacks(app):
         Input("menu-port", "n_clicks"),
         Input("menu-heatmap", "n_clicks"),
         Input("menu-spread", "n_clicks"),
+        Input("menu-ssa", "n_clicks"),
+        Input("menu-financials", "n_clicks"),
+        Input("menu-peers", "n_clicks"),
+        Input("menu-valuations", "n_clicks"),
+        Input("menu-fundamentals", "n_clicks"),
+        Input("menu-earnings", "n_clicks"),
+        Input("menu-calendar", "n_clicks"),
         Input("theme-store", "data"),
         State("active-main-menu", "data"),
     )
-    def set_main_menu(n_dashboard, n_news, n_analyser, n_screener, n_correlation, n_performance, n_watchlist, n_markets, n_prices, n_risk, n_port, n_heatmap, n_spread, theme_mode, current):
+    def set_main_menu(n_dashboard, n_news, n_analyser, n_screener, n_correlation,
+                      n_performance, n_watchlist, n_markets, n_prices, n_risk,
+                      n_port, n_heatmap, n_spread, n_ssa, n_financials, n_peers,
+                      n_valuations, n_fundamentals, n_earnings, n_calendar, theme_mode, current):
         ctx = dash.callback_context
         if not ctx.triggered:
             active = current or "dashboard"
@@ -100,6 +130,9 @@ def register_callbacks(app):
             prop = ctx.triggered[0]["prop_id"].split(".")[0]
             if prop.startswith("menu-"):
                 active = prop.replace("menu-", "")
+                # stock analysis children map to their own sections where relevant
+                if active == "financials":
+                    active = "ssa"
             else:
                 active = current or "dashboard"
 
@@ -107,9 +140,26 @@ def register_callbacks(app):
         btn = _main_menu_btn(c)
         btn_active = _main_menu_btn_active(c)
 
-        names = ["dashboard", "news", "analyser", "screener", "correlation", "performance", "watchlist", "markets", "prices", "risk", "port", "heatmap", "spread"]
-        buttons  = [btn_active if n == active else btn for n in names]
-        sections = [{"display": "block"} if n == active else {"display": "none"} for n in names]
+        # Menu button names (for styling)
+        menu_names = ["dashboard", "news", "analyser", "screener", "correlation",
+                      "performance", "watchlist", "markets", "prices", "risk",
+                      "port", "heatmap", "spread", "ssa", "financials", "peers", "valuations", "fundamentals", "earnings", "calendar"]
+        # "ssa" and "financials" share the overview section highlight logic
+        buttons = []
+        for n in menu_names:
+            is_active = (n == active) or (n in ("ssa", "financials") and active == "ssa")
+            s = dict(btn_active if is_active else btn)
+            if n in ("ssa", "financials", "peers", "valuations", "fundamentals", "earnings", "calendar"):
+                s["paddingLeft"] = "1.4rem"
+                s["fontSize"] = "0.72rem"
+            buttons.append(s)
+
+        # Section names (actual page sections)
+        section_names = ["dashboard", "news", "analyser", "screener", "correlation",
+                         "performance", "watchlist", "markets", "prices", "risk",
+                         "port", "heatmap", "spread", "ssa", "peers", "valuations", "fundamentals", "earnings", "calendar"]
+        sections = [{"display": "block"} if n == active else {"display": "none"}
+                    for n in section_names]
 
         return *buttons, *sections, active
 
@@ -120,6 +170,36 @@ def register_callbacks(app):
     )
     def sync_ticker(val):
         return val or ""
+
+    # ── Datasource toggle (Snowflake ↔ yfinance) ──────────────────────────
+    @app.callback(
+        Output("datasource",         "data"),
+        Output("datasource-toggle",  "children"),
+        Output("datasource-toggle",  "style"),
+        Output("datasource-toggle",  "title"),
+        Input("datasource-toggle",   "n_clicks"),
+        State("datasource",          "data"),
+        prevent_initial_call=True,
+    )
+    def toggle_datasource(n, current):
+        from theme import FONT
+        new_src = "yf" if current == "sf" else "sf"
+        if new_src == "sf":
+            label = "🔌 SF"
+            colour = "#00cc66"
+            tip    = "Data source: Snowflake/FactSet — click to switch to yfinance (offline)"
+        else:
+            label = "📡 YF"
+            colour = "#ff8c00"
+            tip    = "Data source: yfinance (offline) — click to switch to Snowflake"
+        style = {
+            "backgroundColor": colour, "color": "#000",
+            "border": "none", "borderRadius": "6px",
+            "padding": "0.35rem 0.7rem", "fontFamily": FONT,
+            "fontWeight": "700", "fontSize": "0.72rem",
+            "cursor": "pointer", "marginLeft": "0.4rem",
+        }
+        return new_src, label, style, tip
 
 
 def _overlay_style(is_open):

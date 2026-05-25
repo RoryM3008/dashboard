@@ -239,6 +239,27 @@ def build_port_section(LBL, PANEL, C, FONT):
             html.Div(id="port-holdings-table", style={"overflowX": "auto"}),
         ], style=PANEL, className="theme-panel"),
 
+        # ── Holdings Returns ──────────────────────────────────────────────
+        html.Div([
+            html.Div([
+                html.Div("Holdings Returns", style={**LBL, "color": C["accent"],
+                         "fontSize": "0.72rem"}, className="theme-label-accent"),
+                html.Div(style={"flex": "1"}),
+                html.Button("Refresh Returns", id="port-returns-refresh", n_clicks=0, style={
+                    "backgroundColor": "transparent", "color": C["accent"],
+                    "border": f"1px solid {C['accent']}",
+                    "borderRadius": "8px", "padding": "0.35rem 0.9rem",
+                    "fontFamily": FONT, "fontWeight": "600", "fontSize": "0.75rem",
+                    "cursor": "pointer"}),
+            ], style={"display": "flex", "gap": "0.5rem", "alignItems": "center",
+                      "marginBottom": "0.5rem"}),
+            html.Div("Shows period returns for each open holding, plus return since your first buy.",
+                     style={"color": C["muted"], "fontSize": "0.72rem",
+                            "fontFamily": FONT, "marginBottom": "0.6rem"},
+                     className="theme-muted"),
+            html.Div(id="port-returns-table", style={"overflowX": "auto"}),
+        ], style=PANEL, className="theme-panel"),
+
         # ── Cash Reconciliation ───────────────────────────────────────────
         html.Div([
             html.Div("Cash Reconciliation", style={**LBL, "color": C["accent"],

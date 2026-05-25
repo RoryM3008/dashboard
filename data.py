@@ -710,41 +710,43 @@ def build_correlation_data(tickers, frequency):
     return corr, available
 
 
-def build_portfolio_performance_data(tickers, weights, frequency):
-    freq_map = {
-        "daily":   {"interval": "1d",  "period": "1y"},
-        "weekly":  {"interval": "1wk", "period": "5y"},
-        "monthly": {"interval": "1mo", "period": "10y"},
+def build_portfolio_performance_data(tickers, weights, frequency, price_df=None):
+    from snowflake_data import download_prices
+
+    period_map = {
+        "daily":   "10y",
+        "weekly":  "10y",
+        "monthly": "10y",
     }
-    cfg = freq_map.get(frequency, freq_map["weekly"])
+    resample_map = {
+        "daily":   None,
+        "weekly":  "W-FRI",
+        "monthly": "ME",
+    }
+    period = period_map.get(frequency, "5y")
+    rule = resample_map.get(frequency)
 
-    close = yf.download(
-        tickers=tickers,
-        period=cfg["period"],
-        interval=cfg["interval"],
-        auto_adjust=True,
-        progress=False,
-    )
+    if price_df is None:
+        price_df = download_prices(tickers, period=period)
 
-    if close is None or close.empty:
-        return None, None, None
+    if price_df is None or price_df.empty:
+        return None
 
-    if isinstance(close.columns, pd.MultiIndex):
-        price_df = close.get("Close")
-    else:
-        price_df = close
+    # Snowflake returns daily data; resample if needed
+    if rule:
+        price_df = price_df.resample(rule).last().dropna(how="all")
 
     if isinstance(price_df, pd.Series):
         price_df = price_df.to_frame(name=tickers[0])
 
     available = [t for t in tickers if t in price_df.columns]
     if not available:
-        return None, None, None
+        return None
 
     weight_series = pd.Series(weights, index=tickers)
     weight_series = weight_series.reindex(available).dropna()
     if weight_series.empty or weight_series.sum() <= 0:
-        return None, None, None
+        return None
 
     weight_series = weight_series / weight_series.sum()
 
@@ -753,11 +755,16 @@ def build_portfolio_performance_data(tickers, weights, frequency):
     # then drop any leading rows that are still NaN
     aligned_prices = aligned_prices.ffill().dropna(how="any")
     if aligned_prices.empty:
-        return None, None, None
+        return None
+
+    # Identify which ticker has the latest first-available date (limiting factor)
+    first_dates = price_df[weight_series.index].apply(lambda s: s.first_valid_index())
+    limiting_ticker = first_dates.idxmax()
+    limiting_date = first_dates.max()
 
     rebased_components = aligned_prices.divide(aligned_prices.iloc[0]).mul(100)
     portfolio_index = rebased_components.mul(weight_series, axis=1).sum(axis=1)
-    return portfolio_index, rebased_components, weight_series, aligned_prices
+    return portfolio_index, rebased_components, weight_series, aligned_prices, limiting_ticker, limiting_date
 
 
 # ─────────────────────────────────────────────────────────────────────────────

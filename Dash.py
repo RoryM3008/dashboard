@@ -38,6 +38,13 @@ from pages.prices_page import build_prices_section
 from pages.risk_page import build_risk_section
 from pages.heatmap_page import build_heatmap_section
 from pages.spread_page import build_spread_section
+from pages.ssa_page import build_ssa_section
+from pages.peers_page import build_peers_section
+from pages.valuations_page import build_valuations_section
+from pages.fundamentals_page import build_fundamentals_section
+from pages.earnings_page import build_earnings_section
+from pages.calendar_page import build_calendar_section
+import snowflake_data as _sf_mod
 
 # -- Callback modules (each has register_callbacks(app)) ----------------------
 from callbacks import (
@@ -54,6 +61,12 @@ from callbacks import (
     risk_cb,
     heatmap_cb,
     spread_cb,
+    ssa_cb,
+    peers_cb,
+    valuations_cb,
+    fundamentals_cb,
+    earnings_cb,
+    calendar_cb,
 )
 
 # -----------------------------------------------------------------------------
@@ -82,6 +95,8 @@ app.layout = html.Div(id="root-container", style={
 
     # Theme store (persists in browser localStorage)
     dcc.Store(id="theme-store", data="dark", storage_type="local"),
+    # Datasource: 'sf' = Snowflake/FactSet, 'yf' = yfinance (offline mode)
+    dcc.Store(id="datasource", data=("sf" if _sf_mod.SF_AVAILABLE else "yf"), storage_type="local"),
 
     # Title bar
     html.Div([
@@ -98,6 +113,13 @@ app.layout = html.Div(id="root-container", style={
         html.Div(style={"flex": "1"}),
         html.Button("🌙", id="theme-toggle", n_clicks=0,
                      title="Toggle dark / light mode"),
+        html.Button("🔌 SF", id="datasource-toggle", n_clicks=0,
+                     title="Toggle data source: Snowflake ↔ yfinance (offline)",
+                     style={"backgroundColor": "#00cc66", "color": "#000",
+                            "border": "none", "borderRadius": "6px",
+                            "padding": "0.35rem 0.7rem", "fontFamily": FONT,
+                            "fontWeight": "700", "fontSize": "0.72rem",
+                            "cursor": "pointer", "marginLeft": "0.4rem"}),
         html.Div(id="last-updated",
                  style={"marginLeft": "0.75rem", "color": C["muted"],
                         "fontSize": "0.7rem", "alignSelf": "flex-end", "fontFamily": FONT},
@@ -138,6 +160,24 @@ app.layout = html.Div(id="root-container", style={
             html.Button("Risk",           id="menu-risk",         n_clicks=0, style=MAIN_MENU_BTN),
             html.Button("Heatmap",        id="menu-heatmap",      n_clicks=0, style=MAIN_MENU_BTN),
             html.Button("Spread",         id="menu-spread",       n_clicks=0, style=MAIN_MENU_BTN),
+            html.Hr(style={"borderColor": C["border"], "margin": "0.3rem 0"}),
+            html.Div("Stock Analysis", style={**LBL, "fontSize": "0.68rem",
+                     "color": C["accent"], "marginBottom": "0.1rem"},
+                     className="theme-label-accent"),
+            html.Button("Overview",           id="menu-ssa",         n_clicks=0,
+                        style={**MAIN_MENU_BTN, "paddingLeft": "1.4rem", "fontSize": "0.72rem"}),
+            html.Button("Financial Statements", id="menu-financials", n_clicks=0,
+                        style={**MAIN_MENU_BTN, "paddingLeft": "1.4rem", "fontSize": "0.72rem"}),
+            html.Button("Peers", id="menu-peers", n_clicks=0,
+                        style={**MAIN_MENU_BTN, "paddingLeft": "1.4rem", "fontSize": "0.72rem"}),
+            html.Button("Valuations", id="menu-valuations", n_clicks=0,
+                        style={**MAIN_MENU_BTN, "paddingLeft": "1.4rem", "fontSize": "0.72rem"}),
+            html.Button("Fundamentals", id="menu-fundamentals", n_clicks=0,
+                        style={**MAIN_MENU_BTN, "paddingLeft": "1.4rem", "fontSize": "0.72rem"}),
+            html.Button("Earnings & Revisions", id="menu-earnings", n_clicks=0,
+                        style={**MAIN_MENU_BTN, "paddingLeft": "1.4rem", "fontSize": "0.72rem"}),
+            html.Button("Earnings Calendar", id="menu-calendar", n_clicks=0,
+                        style={**MAIN_MENU_BTN, "paddingLeft": "1.4rem", "fontSize": "0.72rem"}),
             html.Hr(style={"borderColor": C["border"], "margin": "0.6rem 0"}),
             html.Div("Holdings", style={**LBL, "marginBottom": "0.3rem"},
                      className="theme-label"),
@@ -184,6 +224,12 @@ app.layout = html.Div(id="root-container", style={
         build_risk_section(LBL, PANEL, C, FONT),
         build_heatmap_section(LBL, PANEL, C, FONT),
         build_spread_section(LBL, PANEL, C, FONT),
+        build_ssa_section(LBL, PANEL, C, FONT),
+        build_peers_section(LBL, PANEL, C, FONT),
+        build_valuations_section(LBL, PANEL, C, FONT),
+        build_fundamentals_section(LBL, PANEL, C, FONT),
+        build_earnings_section(LBL, PANEL, C, FONT),
+        build_calendar_section(LBL, PANEL, C, FONT),
     ], style={"width": "100%"}),
 
     dcc.Interval(id="auto-refresh", interval=5 * 60 * 1000, n_intervals=0),
@@ -205,6 +251,12 @@ prices_cb.register_callbacks(app)
 risk_cb.register_callbacks(app)
 heatmap_cb.register_callbacks(app)
 spread_cb.register_callbacks(app)
+ssa_cb.register_callbacks(app)
+peers_cb.register_callbacks(app)
+valuations_cb.register_callbacks(app)
+fundamentals_cb.register_callbacks(app)
+earnings_cb.register_callbacks(app)
+calendar_cb.register_callbacks(app)
 
 # ── Theme toggle callback ────────────────────────────────────────────────────
 
@@ -252,6 +304,19 @@ if __name__ == "__main__":
     port = int(os.getenv("DASH_PORT", "8051"))
     print("\n  Stock Dashboard")
     print("  ----------------------------------------")
+
+    # Pre-connect to Snowflake (SSO login happens here, before Dash starts).
+    # If unreachable (e.g. at home without VPN), skip silently → offline/yfinance mode.
+    import snowflake_data as _sf_mod
+    try:
+        from snowflake_data import _get_connection
+        print("  Connecting to Snowflake (SSO)...")
+        _get_connection()
+        print("  [OK] Snowflake connected")
+    except Exception as e:
+        _sf_mod.SF_AVAILABLE = False
+        print(f"  [WARN] Snowflake unavailable - running in offline (yfinance) mode: {e}")
+
     print(f"  Open your browser at -> http://127.0.0.1:{port}\n")
     debug_mode = os.getenv("DASH_DEBUG", "0") == "1"
     app.run(debug=debug_mode, port=port, use_reloader=False)

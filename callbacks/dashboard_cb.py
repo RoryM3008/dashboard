@@ -1,7 +1,6 @@
 """Callback — Bloomberg-style dashboard home page."""
 
 import datetime
-from concurrent.futures import ThreadPoolExecutor
 
 import dash
 import numpy as np
@@ -12,13 +11,15 @@ from dash import html, dcc, Input, Output, State, no_update
 from theme import (
     C, FONT, get_theme,
     INDICES, FX_PAIRS, BONDS, COMMODITIES, SECTOR_ETFS,
+    FTSE100_TICKERS, EUROSTOXX50_TICKERS, SP500_TICKERS,
 )
 from data import (
-    parse_tickers, fetch_index_data, fetch_prices,
-    fetch_quote_table, fetch_sector_performance,
-    fetch_chart_data, fetch_portfolio_history,
-    fetch_news, fetch_sp500_movers,
-    fetch_ftse100_movers, fetch_eurostoxx_movers,
+    parse_tickers,
+    fetch_news,
+)
+from snowflake_data import (
+    fetch_quote_table_sf, fetch_fx_rates, fetch_movers_sf,
+    fetch_sector_stocks_1d, SECTOR_CODE_MAP,
 )
 
 
@@ -107,6 +108,7 @@ def _render_news_compact(articles, c):
 
 
 def register_callbacks(app):
+    _sector_drilldown_callbacks(app)
 
     # ══════════════════════════════════════════════════════════════════════
     # 1) Main dashboard refresh — fires on load + refresh + interval
@@ -128,31 +130,55 @@ def register_callbacks(app):
         Input("auto-refresh",  "n_intervals"),
         Input("theme-store",   "data"),
         State("ticker-input",  "value"),
+        State("datasource",    "data"),
     )
-    def update_dashboard(n_clicks, n_intervals, theme_mode, raw):
+    def update_dashboard(n_clicks, n_intervals, theme_mode, raw, datasource):
         c = get_theme(theme_mode or "dark")
         now = datetime.datetime.now().strftime("%d %b %Y %H:%M")
         tickers = parse_tickers(raw)
 
-        # ── Fire ALL data fetches concurrently ─────────────────────────
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            fut_idx   = pool.submit(fetch_index_data)
-            fut_fx    = pool.submit(fetch_quote_table, FX_PAIRS)
-            fut_bond  = pool.submit(fetch_quote_table, BONDS)
-            fut_comm  = pool.submit(fetch_quote_table, COMMODITIES)
-            fut_sect  = pool.submit(fetch_sector_performance)
-            fut_mov   = pool.submit(fetch_sp500_movers, 10)
-            fut_ftse  = pool.submit(fetch_ftse100_movers, 10)
-            fut_euro  = pool.submit(fetch_eurostoxx_movers, 10)
+        if datasource == "yf":
+            offline = html.Div("⚠️ Offline — Snowflake not available",
+                               style={"color": "#ff8c00", "fontSize": "0.78rem",
+                                      "fontFamily": FONT, "padding": "0.5rem"})
+            return (offline,) * 11 + (f"Offline · {now}",)
 
-        idx_data    = fut_idx.result()
-        fx_data     = fut_fx.result()
-        bond_data   = fut_bond.result()
-        comm_data   = fut_comm.result()
-        sector_data = fut_sect.result()
-        gainers_df, losers_df = fut_mov.result()
-        ftse_g, ftse_l = fut_ftse.result()
-        euro_g, euro_l = fut_euro.result()
+        # ── Fire data fetches sequentially (Snowflake connector is not thread-safe) ─
+        try:
+            idx_data  = fetch_quote_table_sf(INDICES)
+        except Exception:
+            idx_data  = []
+        try:
+            fx_data   = fetch_fx_rates()
+        except Exception:
+            fx_data   = []
+        try:
+            bond_data = fetch_quote_table_sf(BONDS)
+        except Exception:
+            bond_data = []
+        try:
+            comm_data = fetch_quote_table_sf(COMMODITIES)
+        except Exception:
+            comm_data = []
+        try:
+            sector_data = fetch_quote_table_sf(SECTOR_ETFS)
+        except Exception:
+            sector_data = []
+        try:
+            gainers_df, losers_df = fetch_movers_sf(SP500_TICKERS, 10, "$")
+        except Exception:
+            import pandas as _pd
+            gainers_df = losers_df = _pd.DataFrame()
+        try:
+            ftse_g, ftse_l = fetch_movers_sf(FTSE100_TICKERS, 10, "\u00a3")
+        except Exception:
+            import pandas as _pd
+            ftse_g = ftse_l = _pd.DataFrame()
+        try:
+            euro_g, euro_l = fetch_movers_sf(EUROSTOXX50_TICKERS, 10, "\u20ac")
+        except Exception:
+            import pandas as _pd
+            euro_g = euro_l = _pd.DataFrame()
 
         # ── Index strip ──────────────────────────────────────────────────
         idx_chips = [_index_chip(d["name"], d["price"], d["chg"], d["pct"], c,
@@ -234,62 +260,110 @@ def register_callbacks(app):
                 f"Updated {now}")
 
     # ══════════════════════════════════════════════════════════════════════
-    # 2) Main chart — reacts to ticker input + frequency dropdown
+    # 2a) Preset period buttons → set start / end date inputs
+    # ══════════════════════════════════════════════════════════════════════
+    @app.callback(
+        Output("dash-chart-start", "value", allow_duplicate=True),
+        Output("dash-chart-end",   "value", allow_duplicate=True),
+        [Input(f"dash-preset-{p}", "n_clicks")
+         for p in ["1d", "5d", "1m", "3m", "ytd", "1y", "5y", "max"]],
+        prevent_initial_call=True,
+    )
+    def set_dash_chart_dates(*clicks):
+        import datetime as _dt
+        ctx = dash.callback_context
+        if not ctx.triggered:
+            return no_update, no_update
+        btn_id = ctx.triggered[0]["prop_id"].split(".")[0]
+        preset = btn_id.replace("dash-preset-", "").upper()
+        today = _dt.date.today()
+        end = today.strftime("%Y-%m-%d")
+        mapping = {
+            "1D": 1, "5D": 5, "1M": 30, "3M": 90,
+            "YTD": None, "1Y": 365, "5Y": 1825, "MAX": 9999,
+        }
+        if preset == "YTD":
+            start = _dt.date(today.year, 1, 1).strftime("%Y-%m-%d")
+        else:
+            days = mapping.get(preset, 365)
+            start = (today - _dt.timedelta(days=days)).strftime("%Y-%m-%d")
+        return start, end
+
+    # ══════════════════════════════════════════════════════════════════════
+    # 2b) Auto-set default dates when ticker changes (1Y)
+    # ══════════════════════════════════════════════════════════════════════
+    @app.callback(
+        Output("dash-chart-start", "value"),
+        Output("dash-chart-end",   "value"),
+        Input("chart-ticker-input", "value"),
+    )
+    def reset_dash_dates_on_ticker(symbol):
+        import datetime as _dt
+        today = _dt.date.today()
+        return (today - _dt.timedelta(days=365)).strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # 2c) Main chart — reacts to date inputs (Bloomberg style)
     # ══════════════════════════════════════════════════════════════════════
     @app.callback(
         Output("sp500-chart",      "figure"),
         Output("sp500-last-price", "children"),
-        Input("chart-ticker-input",  "value"),
-        Input("chart-freq-dropdown", "value"),
-        Input("theme-store",         "data"),
+        Input("dash-chart-start",  "value"),
+        Input("dash-chart-end",    "value"),
+        State("chart-ticker-input", "value"),
+        State("theme-store",        "data"),
+        prevent_initial_call=True,
     )
-    def update_main_chart(symbol, freq, theme_mode):
+    def update_main_chart(start_str, end_str, symbol, theme_mode):
+        from snowflake_data import download_ohlcv
+        import pandas as _pd
         c = get_theme(theme_mode or "dark")
-        symbol = (symbol or "^GSPC").strip().upper()
+        symbol = (symbol or "SPY").strip().upper()
 
-        freq_map = {
-            "intraday": ("5d",  "15m"),
-            "daily":    ("6mo", "1d"),
-            "weekly":   ("2y",  "1wk"),
-            "monthly":  ("5y",  "1mo"),
-        }
-        period, interval = freq_map.get(freq, ("6mo", "1d"))
+        try:
+            ohlcv = download_ohlcv(symbol, start=start_str, end=end_str)
+        except Exception:
+            ohlcv = _pd.DataFrame()
 
-        sp_df = fetch_chart_data(symbol=symbol, period=period, interval=interval)
-        if not sp_df.empty:
-            date_col = next((col for col in sp_df.columns if col in ("Datetime", "Date")), sp_df.columns[0])
-            last_p = sp_df["Close"].iloc[-1]
-            first_p = sp_df["Close"].iloc[0]
-            line_col = c["green"] if last_p >= first_p else c["red"]
-            rgb = "63,185,80" if last_p >= first_p else "248,81,73"
+        bbg_grid = "rgba(60,65,75,0.4)"
+        bbg_text = "#8a8e96"
+        bbg_font = dict(family="Consolas, 'Courier New', monospace", size=10, color=bbg_text)
+
+        if not ohlcv.empty:
+            last_p = ohlcv["Close"].iloc[-1]
+            first_p = ohlcv["Close"].iloc[0]
+            ymin, ymax = ohlcv["Close"].min(), ohlcv["Close"].max()
+            pad = (ymax - ymin) * 0.05
+
             sp_fig = go.Figure()
-            # Invisible baseline so fill stays within the data range
             sp_fig.add_trace(go.Scatter(
-                x=sp_df[date_col], y=[sp_df["Close"].min()] * len(sp_df),
-                mode="lines", line=dict(width=0), showlegend=False,
-                hoverinfo="skip",
-            ))
-            sp_fig.add_trace(go.Scatter(
-                x=sp_df[date_col], y=sp_df["Close"],
-                mode="lines",
-                line=dict(color=line_col, width=1.8),
-                fill="tonexty",
-                fillcolor=f"rgba({rgb},0.10)",
+                x=ohlcv.index, y=ohlcv["Close"], mode="lines",
+                line=dict(color="#1a6dcc", width=1.5),
+                fill="tozeroy", fillcolor="rgba(58,130,220,0.12)",
                 hovertemplate="%{y:,.2f}<extra></extra>",
                 showlegend=False,
             ))
             sp_price_text = f"{symbol}  {last_p:,.2f}"
         else:
             sp_fig = go.Figure()
+            ymin, ymax, pad = 0, 1, 0
             sp_price_text = f"{symbol}  —"
 
         sp_fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            margin=dict(l=0, r=0, t=0, b=0),
-            xaxis=dict(showgrid=False, color=c["subtext"], rangeslider_visible=False),
-            yaxis=dict(showgrid=True, gridcolor=c["border"], color=c["subtext"]),
-            font=dict(family=FONT, size=10, color=c["subtext"]),
-            showlegend=False,
+            paper_bgcolor="#000000", plot_bgcolor="#0a0a0f", font=bbg_font,
+            margin=dict(l=5, r=55, t=8, b=25), showlegend=False,
+            hovermode="x unified",
+            hoverlabel=dict(bgcolor="#1a1d24", font_size=10,
+                            font_family="Consolas, monospace",
+                            font_color="#d0d4db", bordercolor="#333"),
+            xaxis=dict(showgrid=True, gridcolor=bbg_grid, griddash="dot",
+                       gridwidth=0.5, tickfont=bbg_font, color=bbg_text,
+                       showline=False),
+            yaxis=dict(showgrid=True, gridcolor=bbg_grid, griddash="dot",
+                       gridwidth=0.5, side="right", tickprefix="$",
+                       tickfont=bbg_font,
+                       range=[ymin - pad, ymax + pad] if not ohlcv.empty else None,
+                       zeroline=False, showline=False),
         )
         return sp_fig, sp_price_text
 
@@ -400,3 +474,110 @@ def _render_news_full(articles, c):
                   "textDecoration": "none", "lineHeight": "1.5"})
         for a in articles
     ])
+
+def _sector_drilldown_callbacks(app):
+    """Callbacks for the sector drill-down heatmap."""
+
+    @app.callback(
+        Output("sector-drilldown-panel", "style"),
+        Output("sector-drilldown-title", "children"),
+        Output("sector-drilldown-chart", "figure"),
+        Output("sector-drilldown-status", "children"),
+        Input("sector-treemap", "clickData"),
+        Input("sector-drilldown-close", "n_clicks"),
+        State("theme-store", "data"),
+        prevent_initial_call=True,
+    )
+    def on_sector_click(click_data, close_clicks, theme_mode):
+        from theme import get_theme, FONT
+        c = get_theme(theme_mode or "dark")
+        ctx = dash.callback_context
+        trig = ctx.triggered[0]["prop_id"].split(".")[0] if ctx.triggered else ""
+
+        # Close button
+        if trig == "sector-drilldown-close":
+            return {"display": "none"}, "", go.Figure(), ""
+
+        if not click_data:
+            return {"display": "none"}, "", go.Figure(), ""
+
+        sector_name = click_data["points"][0].get("label", "")
+        if sector_name not in SECTOR_CODE_MAP:
+            return {"display": "none"}, "", go.Figure(), ""
+
+        # Fetch stocks
+        try:
+            stocks = fetch_sector_stocks_1d(sector_name, region="US", limit=80)
+        except Exception as e:
+            panel_style = {"backgroundColor": c["panel"], "border": f"1px solid {c['border']}",
+                           "borderRadius": "6px", "padding": "0.7rem 0.9rem",
+                           "marginBottom": "0.6rem", "display": "block"}
+            return panel_style, sector_name, go.Figure(), f"Error: {e}"
+
+        if not stocks:
+            panel_style = {"backgroundColor": c["panel"], "border": f"1px solid {c['border']}",
+                           "borderRadius": "6px", "padding": "0.7rem 0.9rem",
+                           "marginBottom": "0.6rem", "display": "block"}
+            return panel_style, sector_name, go.Figure(), "No data found for this sector."
+
+        tickers  = [s["ticker"] for s in stocks]
+        names    = [s["name"] for s in stocks]
+        pcts     = [s["pct_chg"] for s in stocks]
+        prices   = [s["price"] for s in stocks]
+
+        # Colour: green for positive, red for negative, intensity by magnitude
+        max_abs  = max(abs(p) for p in pcts) or 1
+        colors   = []
+        for p in pcts:
+            intensity = min(abs(p) / max_abs, 1.0)
+            if p >= 0:
+                r = int(0 + intensity * 50)
+                g = int(150 + intensity * 60)
+                b = int(0 + intensity * 30)
+            else:
+                r = int(180 + intensity * 55)
+                g = int(0)
+                b = int(0)
+            colors.append(f"rgb({r},{g},{b})")
+
+        text_labels = [
+            f"{t}<br>{'+' if p >= 0 else ''}{p:.2f}%"
+            for t, p in zip(tickers, pcts)
+        ]
+        hover_text = [
+            f"<b>{t}</b><br>{n}<br>Price: {price:,.2f}<br>1D: {'+' if p >= 0 else ''}{p:.2f}%"
+            for t, n, p, price in zip(tickers, names, pcts, prices)
+        ]
+
+        # Size by absolute % change (min size so tiny movers are still visible)
+        sizes = [abs(p) + 0.5 for p in pcts]
+
+        fig = go.Figure(go.Treemap(
+            labels=tickers,
+            parents=[""] * len(tickers),
+            values=sizes,
+            text=text_labels,
+            textinfo="text",
+            hovertext=hover_text,
+            hoverinfo="text",
+            marker=dict(colors=colors),
+            textfont=dict(family=FONT, size=11),
+        ))
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            margin=dict(l=0, r=0, t=0, b=0),
+            font=dict(family=FONT, color=c["text"]),
+        )
+
+        pos = sum(1 for p in pcts if p > 0)
+        neg = sum(1 for p in pcts if p < 0)
+        avg = sum(pcts) / len(pcts) if pcts else 0
+        status = (f"{len(stocks)} stocks  •  "
+                  f"{pos} ▲  {neg} ▼  •  "
+                  f"Avg 1D: {'+' if avg >= 0 else ''}{avg:.2f}%")
+
+        panel_style = {"backgroundColor": c["panel"], "border": f"1px solid {c['border']}",
+                       "borderRadius": "6px", "padding": "0.7rem 0.9rem",
+                       "marginBottom": "0.6rem", "display": "block"}
+        title = f"{sector_name} — Stock Heatmap (1D)"
+        return panel_style, title, fig, status

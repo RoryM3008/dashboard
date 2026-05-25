@@ -17,6 +17,7 @@ from portfolio import (
     import_csv, export_csv, compute_holdings, compute_portfolio_ts,
     set_cash_override, get_cash_override, clear_cash_override,
     set_price_override, clear_price_override, list_price_overrides,
+    _resolve_ticker,
 )
 
 _COLOURS = [
@@ -1105,3 +1106,176 @@ def register_callbacks(app):
         calc = summary.get("cash_calculated", 0)
         starting = current_val - calc
         return f"Starting Cash: £{starting:,.2f}"
+
+    # ── 8) Holdings period returns ────────────────────────────────────────────
+    @app.callback(
+        Output("port-returns-table", "children"),
+        Input("port-holdings-data",    "data"),
+        Input("port-returns-refresh",  "n_clicks"),
+        State("theme-store",           "data"),
+    )
+    def render_holdings_returns(data, _refresh, theme_mode):
+        c = get_theme(theme_mode or "dark")
+
+        th_s = {
+            "padding": "0.3rem 0.6rem", "fontSize": "0.6rem", "fontWeight": "700",
+            "textTransform": "uppercase", "letterSpacing": "0.05em",
+            "borderBottom": f"2px solid {c['border']}", "fontFamily": FONT,
+            "color": c["muted"], "whiteSpace": "nowrap", "textAlign": "right",
+        }
+        td_s = {
+            "padding": "0.3rem 0.6rem", "fontSize": "0.75rem", "fontFamily": FONT,
+            "color": c["text"], "borderBottom": f"1px solid {c['border']}",
+            "whiteSpace": "nowrap", "textAlign": "right",
+        }
+
+        if not data:
+            return html.Div("No holdings yet.",
+                            style={"color": c["muted"], "fontSize": "0.82rem",
+                                   "fontFamily": FONT})
+
+        hdf = pd.DataFrame(data)
+        active = hdf[hdf["shares"] > 0].copy() if "shares" in hdf.columns else hdf.copy()
+        if active.empty:
+            return html.Div("No open positions.",
+                            style={"color": c["muted"], "fontSize": "0.82rem",
+                                   "fontFamily": FONT})
+
+        tickers = active["ticker"].tolist()
+
+        # Derive first-buy dates from transaction ledger
+        txns = load_transactions()
+        first_buy = {}
+        if not txns.empty:
+            buys = txns[txns["side"] == "BUY"].copy()
+            buys["date"] = pd.to_datetime(buys["date"], errors="coerce")
+            for t in tickers:
+                t_buys = buys[buys["ticker"] == t]
+                if not t_buys.empty:
+                    first_buy[t] = t_buys["date"].min()
+
+        # Periods: label → yfinance period string (1D handled separately below)
+        PERIODS = [
+            ("1D",   None),   # special: last price vs previous close
+            ("5D",   "5d"),
+            ("1Wk",  "1wk"),
+            ("1Mo",  "1mo"),
+            ("3Mo",  "3mo"),
+            ("6Mo",  "6mo"),
+            ("12Mo", "1y"),
+        ]
+
+        def _pct_ret(hist):
+            if hist is None or hist.empty or len(hist) < 2:
+                return None
+            start = hist["Close"].iloc[0]
+            end   = hist["Close"].iloc[-1]
+            if start and start != 0:
+                return (end / start - 1) * 100
+            return None
+
+        # Fetch all period histories + since-first-buy in one yf.download call per period
+        period_returns = {t: {} for t in tickers}
+
+        # Batch download per period
+        yf_tickers = {t: _resolve_ticker(t)[0] for t in tickers}
+
+        import datetime as _dt
+
+        # ── 1D: last price vs previous session close ──────────────────────
+        for t in tickers:
+            try:
+                yf_t = yf_tickers[t]
+                ticker_obj = yf.Ticker(yf_t)
+                fi = ticker_obj.fast_info
+                last = fi.last_price
+                prev_close = fi.previous_close
+                if last and prev_close and prev_close != 0:
+                    period_returns[t]["1D"] = (last / prev_close - 1) * 100
+                else:
+                    period_returns[t]["1D"] = None
+            except Exception:
+                period_returns[t]["1D"] = None
+
+        # ── All other periods: batch yf.download ──────────────────────────
+        for label, period in PERIODS:
+            if period is None:
+                continue  # 1D already handled
+            try:
+                batch = yf.download(
+                    list(yf_tickers.values()),
+                    period=period,
+                    progress=False,
+                    auto_adjust=True,
+                    group_by="ticker",
+                )
+                for t in tickers:
+                    yf_t = yf_tickers[t]
+                    try:
+                        if len(tickers) == 1:
+                            hist = batch[["Close"]].dropna()
+                        else:
+                            hist = batch[yf_t][["Close"]].dropna()
+                        period_returns[t][label] = _pct_ret(hist)
+                    except Exception:
+                        period_returns[t][label] = None
+            except Exception:
+                for t in tickers:
+                    period_returns[t][label] = None
+
+        # Since first buy — individual downloads (dates vary per ticker)
+        for t in tickers:
+            fb = first_buy.get(t)
+            if fb is None:
+                period_returns[t]["Since Buy"] = None
+                continue
+            try:
+                yf_t = yf_tickers[t]
+                start_str = fb.strftime("%Y-%m-%d")
+                hist = yf.download(yf_t, start=start_str, progress=False,
+                                   auto_adjust=True)[["Close"]].dropna()
+                period_returns[t]["Since Buy"] = _pct_ret(hist)
+            except Exception:
+                period_returns[t]["Since Buy"] = None
+
+        # Build table
+        def _fmt_ret(v, accent=False):
+            if v is None:
+                return html.Td("—", style={**td_s, "color": c["muted"]})
+            is_pos = v >= 0
+            bg = "#0d2b0d" if is_pos else "#2b0d0d"
+            if accent:
+                bg = "#0a1e2e" if is_pos else "#2b1020"
+            sign = "+" if is_pos else ""
+            return html.Td(f"{sign}{v:.2f}%",
+                           style={**td_s, "backgroundColor": bg, "color": "#ffffff",
+                                  "fontWeight": "700", "borderRadius": "4px"})
+
+        header = html.Thead(html.Tr([
+            html.Th("Ticker",    style={**th_s, "textAlign": "left"}),
+            html.Th("First Buy", style={**th_s, "textAlign": "left"}),
+            html.Th("Weight",    style=th_s),
+            *[html.Th(l, style=th_s) for l, _ in PERIODS],
+            html.Th("Since Buy", style={**th_s, "color": c["accent"]}),
+        ]))
+
+        rows = []
+        for _, row in active.iterrows():
+            t = row["ticker"]
+            rets = period_returns.get(t, {})
+            fb = first_buy.get(t)
+            fb_str = fb.strftime("%d %b %Y") if fb else "—"
+            rows.append(html.Tr([
+                html.Td(t, style={**td_s, "textAlign": "left", "color": c["accent"],
+                                  "fontWeight": "700"}),
+                html.Td(fb_str, style={**td_s, "textAlign": "left",
+                                       "color": c["muted"], "fontSize": "0.7rem"}),
+                html.Td(f"{row.get('weight_pct', 0):.1f}%", style=td_s),
+                *[_fmt_ret(rets.get(l)) for l, _ in PERIODS],
+                _fmt_ret(rets.get("Since Buy"), accent=True),
+            ]))
+
+        return html.Table(
+            [header, html.Tbody(rows)],
+            style={"width": "100%", "borderCollapse": "collapse"},
+        )

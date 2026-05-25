@@ -15,6 +15,7 @@ document.addEventListener("click", function (e) {
     ).set;
     nativeInputValueSetter.call(input, ticker);
     input.dispatchEvent(new Event("input", { bubbles: true }));
-    // Also trigger change for debounced inputs
+    // Trigger change + blur so debounced dcc.Input picks it up
     input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new Event("blur", { bubbles: true }));
 });

@@ -1,4 +1,5 @@
 from dash import dcc, html
+from theme import BENCHMARK_OPTIONS
 
 
 def build_performance_section(LBL, PANEL, C, FONT):
@@ -61,27 +62,14 @@ def build_performance_section(LBL, PANEL, C, FONT):
                 ]),
 
                 html.Div([
-                    html.Div("Start Date", style={**LBL, "marginBottom": "0.3rem"},
-                             className="theme-label"),
-                    dcc.DatePickerSingle(
-                        id="perf-start-date",
-                        placeholder="Optional",
-                        display_format="DD-MM-YYYY",
-                    ),
-                ]),
-
-                html.Div([
                     html.Div("Benchmarks", style={**LBL, "marginBottom": "0.3rem"},
                              className="theme-label"),
-                    dcc.Input(
+                    dcc.Dropdown(
                         id="perf-benchmarks",
-                        type="text",
-                        placeholder="e.g. SPY, EFA, AGG",
-                        className="theme-input",
-                        style={"backgroundColor": C["bg"], "border": f"1px solid {C['border']}",
-                               "borderRadius": "8px", "color": C["text"],
-                               "padding": "0.5rem 0.9rem", "fontFamily": FONT,
-                               "fontSize": "0.82rem", "width": "220px", "outline": "none"},
+                        options=BENCHMARK_OPTIONS,
+                        multi=True,
+                        placeholder="Search benchmarks...",
+                        style={"width": "350px", "fontSize": "0.82rem"},
                     ),
                 ]),
 
@@ -93,6 +81,50 @@ def build_performance_section(LBL, PANEL, C, FONT):
                 }),
             ], style={"display": "flex", "gap": "0.75rem", "flexWrap": "wrap",
                       "alignItems": "flex-end", "marginBottom": "0.9rem"}),
+
+            # Bloomberg-style date controls
+            html.Div([
+                html.Div([
+                    html.Span("START", style={"fontSize": "0.55rem",
+                              "fontWeight": "700", "color": "#000",
+                              "marginRight": "0.3rem"}),
+                    dcc.Input(id="perf-chart-start", type="text",
+                              value="", debounce=True,
+                              style={"backgroundColor": "transparent",
+                                     "border": "none", "color": "#000",
+                                     "fontFamily": "Consolas, monospace",
+                                     "fontSize": "0.72rem", "width": "80px",
+                                     "padding": "0", "outline": "none"}),
+                ], style={"display": "inline-flex", "alignItems": "center",
+                          "backgroundColor": "#ff8c00", "borderRadius": "3px",
+                          "padding": "0.2rem 0.5rem", "marginRight": "0.4rem"}),
+                html.Div([
+                    html.Span("END", style={"fontSize": "0.55rem",
+                              "fontWeight": "700", "color": "#000",
+                              "marginRight": "0.3rem"}),
+                    dcc.Input(id="perf-chart-end", type="text",
+                              value="", debounce=True,
+                              style={"backgroundColor": "transparent",
+                                     "border": "none", "color": "#000",
+                                     "fontFamily": "Consolas, monospace",
+                                     "fontSize": "0.72rem", "width": "80px",
+                                     "padding": "0", "outline": "none"}),
+                ], style={"display": "inline-flex", "alignItems": "center",
+                          "backgroundColor": "#ff8c00", "borderRadius": "3px",
+                          "padding": "0.2rem 0.5rem", "marginRight": "0.8rem"}),
+                *[html.Button(lbl, id=f"perf-preset-{pid}",
+                              n_clicks=0,
+                              style={"backgroundColor": "transparent",
+                                     "border": f"1px solid {C['border']}",
+                                     "borderRadius": "3px", "color": C["muted"],
+                                     "fontFamily": "Consolas, monospace",
+                                     "fontSize": "0.65rem", "padding": "0.18rem 0.5rem",
+                                     "cursor": "pointer", "marginRight": "0.2rem"})
+                  for lbl, pid in [("1M","1m"),("3M","3m"),("6M","6m"),
+                                   ("YTD","ytd"),("1Y","1y"),("2Y","2y"),
+                                   ("5Y","5y"),("MAX","max")]],
+            ], style={"display": "flex", "alignItems": "center",
+                      "marginBottom": "0.6rem"}),
 
             html.Div(id="perf-status",
                      style={"color": C["muted"], "fontSize": "0.75rem",

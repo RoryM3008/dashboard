@@ -54,27 +54,13 @@ def build_dashboard_section(LBL, PANEL):
                     html.Div([
                         dcc.Input(
                             id="chart-ticker-input", type="text",
-                            value="^GSPC", debounce=False,
-                            placeholder="Ticker e.g. ^GSPC, AAPL",
+                            value="SPY", debounce=True,
+                            placeholder="Ticker e.g. SPY, AAPL",
                             style={"backgroundColor": C["bg"],
                                    "border": f"1px solid {C['border']}",
                                    "borderRadius": "4px", "color": C["text"],
                                    "padding": "0.3rem 0.5rem", "fontFamily": FONT,
                                    "fontSize": "0.78rem", "width": "130px"},
-                        ),
-                        dcc.Dropdown(
-                            id="chart-freq-dropdown",
-                            options=[
-                                {"label": "Intraday", "value": "intraday"},
-                                {"label": "Daily",    "value": "daily"},
-                                {"label": "Weekly",   "value": "weekly"},
-                                {"label": "Monthly",  "value": "monthly"},
-                            ],
-                            value="daily",
-                            clearable=False,
-                            style={"width": "120px", "fontSize": "0.76rem",
-                                   "fontFamily": FONT},
-                            className="chart-freq-dd",
                         ),
                         html.Div(style={"flex": "1"}),
                         html.Div(id="sp500-last-price",
@@ -82,6 +68,51 @@ def build_dashboard_section(LBL, PANEL):
                                         "fontWeight": "700", "color": C["text"]}),
                     ], style={"display": "flex", "alignItems": "center",
                               "gap": "0.5rem", "marginBottom": "0.4rem"}),
+
+                    # Bloomberg-style date controls
+                    html.Div([
+                        html.Div([
+                            html.Span("START", style={"fontSize": "0.55rem",
+                                      "fontWeight": "700", "color": "#000",
+                                      "marginRight": "0.3rem"}),
+                            dcc.Input(id="dash-chart-start", type="text",
+                                      value="", debounce=True,
+                                      style={"backgroundColor": "transparent",
+                                             "border": "none", "color": "#000",
+                                             "fontFamily": "Consolas, monospace",
+                                             "fontSize": "0.72rem", "width": "80px",
+                                             "padding": "0", "outline": "none"}),
+                        ], style={"display": "inline-flex", "alignItems": "center",
+                                  "backgroundColor": "#ff8c00", "borderRadius": "3px",
+                                  "padding": "0.2rem 0.5rem", "marginRight": "0.4rem"}),
+                        html.Div([
+                            html.Span("END", style={"fontSize": "0.55rem",
+                                      "fontWeight": "700", "color": "#000",
+                                      "marginRight": "0.3rem"}),
+                            dcc.Input(id="dash-chart-end", type="text",
+                                      value="", debounce=True,
+                                      style={"backgroundColor": "transparent",
+                                             "border": "none", "color": "#000",
+                                             "fontFamily": "Consolas, monospace",
+                                             "fontSize": "0.72rem", "width": "80px",
+                                             "padding": "0", "outline": "none"}),
+                        ], style={"display": "inline-flex", "alignItems": "center",
+                                  "backgroundColor": "#ff8c00", "borderRadius": "3px",
+                                  "padding": "0.2rem 0.5rem", "marginRight": "0.8rem"}),
+                        *[html.Button(lbl, id=f"dash-preset-{pid}",
+                                      n_clicks=0,
+                                      style={"backgroundColor": "transparent",
+                                             "border": f"1px solid {C['border']}",
+                                             "borderRadius": "3px", "color": C["muted"],
+                                             "fontFamily": "Consolas, monospace",
+                                             "fontSize": "0.65rem", "padding": "0.18rem 0.5rem",
+                                             "cursor": "pointer", "marginRight": "0.2rem"})
+                          for lbl, pid in [("1D","1d"),("5D","5d"),("1M","1m"),
+                                           ("3M","3m"),("YTD","ytd"),("1Y","1y"),
+                                           ("5Y","5y"),("MAX","max")]],
+                    ], style={"display": "flex", "alignItems": "center",
+                              "marginBottom": "0.3rem"}),
+
                     dcc.Graph(id="sp500-chart",
                               config={"displayModeBar": False},
                               style={"height": "320px"}),
@@ -99,6 +130,26 @@ def build_dashboard_section(LBL, PANEL):
                               config={"displayModeBar": False},
                               style={"height": "280px"}),
                 ], style=BP, className="theme-panel"),
+
+                # Sector drill-down heatmap (hidden until a sector is clicked)
+                html.Div([
+                    html.Div([
+                        html.Div(id="sector-drilldown-title",
+                                 style={**LBL, "flex": "1"}, className="theme-label"),
+                        html.Button("✕", id="sector-drilldown-close", n_clicks=0,
+                                    style={"background": "none", "border": "none",
+                                           "color": C["muted"], "fontSize": "0.9rem",
+                                           "cursor": "pointer", "padding": "0"}),
+                    ], style={"display": "flex", "alignItems": "center",
+                              "marginBottom": "0.4rem"}),
+                    html.Div(id="sector-drilldown-status",
+                             style={"color": C["muted"], "fontSize": "0.68rem",
+                                    "fontFamily": FONT, "marginBottom": "0.3rem"}),
+                    dcc.Graph(id="sector-drilldown-chart",
+                              config={"displayModeBar": False},
+                              style={"height": "320px"}),
+                ], id="sector-drilldown-panel",
+                   style={**BP, "display": "none"}, className="theme-panel"),
 
                 # Top gainers
                 html.Div([

@@ -85,12 +85,12 @@
 
 /* Sub-text */
 #root-container.light-mode .theme-subtext {
-    color: #57606a !important;
+    color: #eeeeee !important;
 }
 
 /* Normal text */
 #root-container.light-mode .theme-text {
-    color: #1c1e21 !important;
+    color: #e7e7e7 !important;
 }
 
 /* Outline buttons */

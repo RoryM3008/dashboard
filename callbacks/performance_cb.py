@@ -4,7 +4,7 @@ import re
 import datetime
 import io
 import pandas as pd
-import yfinance as yf
+import dash
 
 import plotly.graph_objects as go
 from plotly.colors import sample_colorscale
@@ -12,9 +12,81 @@ from dash import dcc, html, Input, Output, State
 
 from theme import FONT, get_theme
 from data import parse_tickers, build_portfolio_performance_data
+from snowflake_data import download_prices, download_msci_index
+import yfinance as yf
+
+
+def _prices_yf(tickers, start=None, end=None, period="10y"):
+    """yfinance price download returning a DataFrame aligned with download_prices output."""
+    import datetime as _dt
+    if start is None:
+        end_dt   = _dt.date.today()
+        days_map = {"1y": 365, "2y": 730, "3y": 1095, "5y": 1825, "10y": 3650}
+        days     = days_map.get(str(period), 3650)
+        start_dt = end_dt - _dt.timedelta(days=days)
+        start    = start_dt.strftime("%Y-%m-%d")
+        end      = end_dt.strftime("%Y-%m-%d")
+    raw = yf.download(tickers, start=start, end=end, auto_adjust=True, progress=False)
+    if raw.empty:
+        return pd.DataFrame()
+    if isinstance(raw.columns, pd.MultiIndex):
+        close = raw["Close"]
+    else:
+        close = raw[["Close"]]
+        close.columns = tickers[:1]
+    return close
+
+
+def _fetch_benchmark_series(ticker, period="10y", datasource="sf"):
+    """Fetch a benchmark price series. Supports MSCI:CODE syntax."""
+    if ticker.upper().startswith("MSCI:"):
+        if datasource == "sf":
+            code = ticker.split(":", 1)[1].strip()
+            s = download_msci_index(code, period=period)
+            if not s.empty:
+                return s
+        return None  # MSCI indices not available via yfinance
+    # Regular ticker
+    if datasource == "sf":
+        bh = download_prices([ticker], period=period)
+    else:
+        bh = _prices_yf([ticker], period=period)
+    if bh is None or bh.empty:
+        return None
+    s = bh.iloc[:, 0]
+    s.name = ticker
+    return s
 
 
 def register_callbacks(app):
+
+    # Preset period buttons → set start/end date inputs
+    @app.callback(
+        Output("perf-chart-start", "value", allow_duplicate=True),
+        Output("perf-chart-end",   "value", allow_duplicate=True),
+        [Input(f"perf-preset-{p}", "n_clicks")
+         for p in ["1m", "3m", "6m", "ytd", "1y", "2y", "5y", "max"]],
+        prevent_initial_call=True,
+    )
+    def set_perf_chart_dates(*clicks):
+        import datetime as _dt
+        ctx = dash.callback_context
+        if not ctx.triggered:
+            return dash.no_update, dash.no_update
+        btn_id = ctx.triggered[0]["prop_id"].split(".")[0]
+        preset = btn_id.replace("perf-preset-", "").upper()
+        today = _dt.date.today()
+        end = today.strftime("%Y-%m-%d")
+        mapping = {
+            "1M": 30, "3M": 90, "6M": 180, "YTD": None,
+            "1Y": 365, "2Y": 730, "5Y": 1825, "MAX": 9999,
+        }
+        if preset == "YTD":
+            start = _dt.date(today.year, 1, 1).strftime("%Y-%m-%d")
+        else:
+            days = mapping.get(preset, 365)
+            start = (today - _dt.timedelta(days=days)).strftime("%Y-%m-%d")
+        return start, end
 
     @app.callback(
         Output("perf-chart", "children"),
@@ -26,12 +98,14 @@ def register_callbacks(app):
         State("perf-tickers", "value"),
         State("perf-weights", "value"),
         State("perf-frequency", "value"),
-        State("perf-start-date", "date"),
+        State("perf-chart-start", "value"),
+        State("perf-chart-end", "value"),
         State("perf-benchmarks", "value"),
         State("theme-store", "data"),
+        State("datasource", "data"),
         prevent_initial_call=True,
     )
-    def calculate_portfolio_performance(n, raw_tickers, raw_weights, frequency, start_date, raw_benchmarks, theme_mode):
+    def calculate_portfolio_performance(n, raw_tickers, raw_weights, frequency, start_date, end_date, raw_benchmarks, theme_mode, datasource):
         c = get_theme(theme_mode or "dark")
         is_dark = (theme_mode or "dark") == "dark"
         hover_bg = "#1a1a1a" if is_dark else "#ffffff"
@@ -59,14 +133,22 @@ def register_callbacks(app):
         if sum(weights) <= 0:
             return html.Div(), html.Div(), html.Div(), None, "Total weight must be greater than zero."
 
-        port_index, component_index, used_weights, raw_prices = build_portfolio_performance_data(
-            tickers, weights, frequency or "weekly"
+        datasource = datasource or "sf"
+        if datasource == "yf":
+            price_df_input = _prices_yf(tickers, period="10y")
+        else:
+            price_df_input = None  # build_portfolio_performance_data will fetch from Snowflake
+
+        result = build_portfolio_performance_data(
+            tickers, weights, frequency or "weekly", price_df=price_df_input
         )
-        if port_index is None or component_index is None or used_weights is None:
+        if result is None or result[0] is None:
             return html.Div(), html.Div(), html.Div(), None, "No usable price history found for these inputs."
 
+        port_index, component_index, used_weights, raw_prices, limiting_ticker, limiting_date = result
+
         # Optional: start from a selected date and rebase to 100 from that point
-        if start_date:
+        if start_date and start_date.strip():
             try:
                 start_dt = pd.Timestamp(start_date).normalize()
                 component_cut = component_index[component_index.index >= start_dt]
@@ -169,7 +251,7 @@ def register_callbacks(app):
 
         # ── Benchmark comparison chart ────────────────────────────────
         bench_chart = html.Div()
-        bench_tickers = parse_tickers(raw_benchmarks) if raw_benchmarks else []
+        bench_tickers = raw_benchmarks if raw_benchmarks else []
         if bench_tickers:
             _resample = {"daily": None, "weekly": "W-FRI", "monthly": "ME"}
             rule = _resample.get(frequency or "weekly")
@@ -191,12 +273,11 @@ def register_callbacks(app):
             for i, bt in enumerate(bench_tickers):
                 try:
                     print(f"[BENCH] Fetching {bt}...")
-                    bh = yf.Ticker(bt).history(period="max", auto_adjust=True)
-                    if bh.empty:
+                    bs = _fetch_benchmark_series(bt, period="10y", datasource=datasource)
+                    if bs is None:
                         print(f"[BENCH] {bt}: empty history")
                         continue
-                    bs = bh["Close"]
-                    bs.index = bs.index.tz_localize(None)
+                    bs.index = pd.to_datetime(bs.index).tz_localize(None)
                     if rule:
                         bs = bs.resample(rule).last().dropna()
                     # Align to portfolio date range using nearest/forward-fill
@@ -215,11 +296,12 @@ def register_callbacks(app):
                     if first_bench_rebased is None:
                         first_bench_rebased = bs.copy()
                     clr = bench_colors[i % len(bench_colors)]
+                    label = bs.name if hasattr(bs, 'name') and bs.name else bt
                     fig_b.add_trace(go.Scatter(
                         x=bs.index, y=bs, mode="lines",
                         line={"width": 2, "color": clr},
-                        name=bt,
-                        hovertemplate=f"{bt}: %{{y:.2f}}<extra></extra>",
+                        name=label,
+                        hovertemplate=f"{label}: %{{y:.2f}}<extra></extra>",
                     ))
                     print(f"[BENCH] {bt}: added trace OK, last val={bs.iloc[-1]:.2f}")
                 except Exception as exc:
@@ -231,10 +313,9 @@ def register_callbacks(app):
                 bt0 = bench_tickers[0]
                 try:
                     # Download benchmark as DAILY data (don't resample independently)
-                    bh_raw = yf.Ticker(bt0).history(period="max", auto_adjust=True)
-                    if not bh_raw.empty:
-                        bs_daily = bh_raw["Close"]
-                        bs_daily.index = bs_daily.index.tz_localize(None).normalize()
+                    bs_daily = _fetch_benchmark_series(bt0, period="10y", datasource=datasource)
+                    if bs_daily is not None:
+                        bs_daily.index = pd.to_datetime(bs_daily.index).normalize()
 
                         # Get the portfolio's actual dates
                         port_s = port_index.copy()
@@ -271,7 +352,7 @@ def register_callbacks(app):
                                 print(f"[TE] latest rolling TE = {te_rolling.iloc[-1]:.2f}%")
                                 fig_b.add_trace(go.Scatter(
                                     x=te_rolling.index, y=te_rolling, mode="lines",
-                                    line={"width": 1.8, "color": "#ffa726", "dash": "dot"},
+                                    line={"width": 1.8, "color": "#b0b0b0", "dash": "dot"},
                                     name=f"Tracking Error vs {bt0}",
                                     yaxis="y2",
                                     hovertemplate="TE: %{y:.2f}%<extra></extra>",
@@ -314,17 +395,17 @@ def register_callbacks(app):
         index_df.index.name = "Date"
 
         # Add benchmark data to both tabs
-        bench_tickers_list = parse_tickers(raw_benchmarks) if raw_benchmarks else []
+        bench_tickers_list = raw_benchmarks if raw_benchmarks else []
         for bt in bench_tickers_list:
             try:
-                bh = yf.Ticker(bt).history(period="max", auto_adjust=True)
-                if bh.empty:
+                bs = _fetch_benchmark_series(bt, period="10y", datasource=datasource)
+                if bs is None:
                     continue
-                bs = bh["Close"]
-                bs.index = bs.index.tz_localize(None).normalize()
+                bs.index = pd.to_datetime(bs.index).normalize()
                 bs_aligned = bs.reindex(prices_df.index, method="ffill").dropna()
-                prices_df[bt] = bs_aligned
-                index_df[bt] = (bs_aligned / bs_aligned.iloc[0]) * 100
+                label = bs.name if hasattr(bs, 'name') and bs.name else bt
+                prices_df[label] = bs_aligned
+                index_df[label] = (bs_aligned / bs_aligned.iloc[0]) * 100
             except Exception:
                 continue
 
@@ -337,10 +418,13 @@ def register_callbacks(app):
 
         total_return = ((float(port_index.iloc[-1]) / float(port_index.iloc[0])) - 1) * 100
         freq_label = (frequency or "weekly").capitalize()
-        start_txt = f" From {pd.Timestamp(start_date).strftime('%d-%b-%Y')}." if start_date else ""
+        start_txt = f" From {pd.Timestamp(start_date).strftime('%d-%b-%Y')}." if start_date and start_date.strip() else ""
+        limit_txt = ""
+        if limiting_ticker and limiting_date is not None:
+            limit_txt = f" History limited to {pd.Timestamp(limiting_date).strftime('%d-%b-%Y')} by {limiting_ticker}."
         status = (
             f"{freq_label} portfolio performance across {len(used_weights)} ticker(s). "
-            f"Total return over shown period: {total_return:+.2f}%.{start_txt}"
+            f"Total return over shown period: {total_return:+.2f}%.{start_txt}{limit_txt}"
         )
 
         return dcc.Graph(figure=fig, config={"displayModeBar": False}), bench_chart, weights_table, export_store, status

@@ -1,22 +1,29 @@
 """Callback — Risk Contribution: snapshot table + rolling chart."""
 
 import pandas as pd
-import yfinance as yf
 import plotly.graph_objects as go
 import dash
-from concurrent.futures import ThreadPoolExecutor
 from dash import dcc, html, Input, Output, State, no_update
 
 from theme import FONT, get_theme
-from data import parse_tickers, risk_contrib, rolling_risk_contrib
+from data import risk_contrib, rolling_risk_contrib
+from snowflake_data import download_prices
+import yfinance as yf
 from portfolio import (
     load_transactions,
     compute_holdings,
-    _resolve_ticker,
     set_price_override,
     clear_price_override,
     list_price_overrides,
 )
+
+
+def parse_tickers(raw):
+    """Parse a comma/space-separated ticker string into a list of uppercase strings."""
+    import re
+    if not raw:
+        return []
+    return [t.upper() for t in re.split(r'[\s,;]+', raw.strip()) if t]
 
 _COLOURS = [
     "#ff8c00", "#4296f5", "#00d26a", "#ff3333", "#a855f7",
@@ -40,25 +47,27 @@ def _parse_weights(raw):
     return out
 
 
-def _download_returns(tickers, period="3y"):
+def _download_returns(tickers, period="3y", datasource="sf"):
     """Download daily close prices and return a returns DataFrame."""
-    raw = yf.download(
-        tickers=tickers,
-        period=period,
-        interval="1d",
-        auto_adjust=True,
-        progress=False,
-    )
-    if raw is None or raw.empty:
-        return None, 0
+    period_map = {"1y": "1y", "2y": "2y", "3y": "3y", "5y": "5y"}
+    sf_period = period_map.get(str(period), period)
 
-    if isinstance(raw.columns, pd.MultiIndex):
-        price_df = raw.get("Close")
+    if datasource == "yf":
+        import datetime as _dt
+        days_map = {"1y": 365, "2y": 730, "3y": 1095, "5y": 1825}
+        days = days_map.get(sf_period, 1095)
+        start = (_dt.date.today() - _dt.timedelta(days=days)).strftime("%Y-%m-%d")
+        raw = yf.download(tickers, start=start, auto_adjust=True, progress=False)
+        if raw.empty:
+            return None, 0
+        price_df = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]]
+        if isinstance(price_df, pd.Series):
+            price_df = price_df.to_frame(name=tickers[0])
     else:
-        price_df = raw
+        price_df = download_prices(tickers, period=sf_period)
 
-    if isinstance(price_df, pd.Series):
-        price_df = price_df.to_frame(name=tickers[0])
+    if price_df is None or price_df.empty:
+        return None, 0
 
     applied = _apply_price_overrides_to_prices(price_df)
     returns = price_df.pct_change().dropna(how="all")
@@ -198,15 +207,10 @@ def register_callbacks(app):
             active = hdf[hdf["shares"] > 0].copy()
             if active.empty:
                 return no_update, no_update, "No active holdings."
-            # Resolve to Yahoo tickers for downstream yfinance calls (parallel)
             ticker_list = active["ticker"].tolist()
-            with ThreadPoolExecutor(max_workers=10) as pool:
-                yf_tickers = list(pool.map(
-                    lambda t: _resolve_ticker(t)[0], ticker_list))
-            tickers_str = ", ".join(yf_tickers)
+            tickers_str = ", ".join(ticker_list)
             weights_str = ", ".join(f"{w / 100:.4f}" for w in active["weight_pct"])
-            n_stocks = len(yf_tickers)
-            return tickers_str, weights_str, f"Loaded {n_stocks} holdings."
+            return tickers_str, weights_str, f"Loaded {len(ticker_list)} holdings."
         except Exception as exc:
             return no_update, no_update, f"Error: {exc}"
 
@@ -221,9 +225,10 @@ def register_callbacks(app):
         State("risk-window",    "value"),
         State("risk-history",   "value"),
         State("theme-store",    "data"),
+        State("datasource",     "data"),
         prevent_initial_call=True,
     )
-    def compute_risk(n, raw_tickers, raw_weights, raw_bench, window, history, theme_mode):
+    def compute_risk(n, raw_tickers, raw_weights, raw_bench, window, history, theme_mode, datasource):
         c = get_theme(theme_mode or "dark")
 
         tickers = parse_tickers(raw_tickers)
@@ -252,7 +257,7 @@ def register_callbacks(app):
                 all_tickers.append(bench_ticker)
 
         # Download
-        returns_df, n_ovr = _download_returns(all_tickers, period=history or "3y")
+        returns_df, n_ovr = _download_returns(all_tickers, period=history or "3y", datasource=datasource or "sf")
         if returns_df is None or returns_df.empty:
             return html.Div(), html.Div(), "No return data available — check tickers."
 
