@@ -175,4 +175,61 @@ def build_spread_section(LBL, PANEL, C, FONT):
             "height": "calc(100vh - 180px)",
             "overflow": "hidden",
         }, className="theme-panel"),
+
+        # ── Valuation Metrics Comparison ──────────────────────────────────
+        html.Div([
+            html.Div([
+                html.Div("VALUATION METRICS", style={
+                    **LBL, "color": C["accent"], "fontSize": "0.68rem",
+                    "flex": "1",
+                }),
+                html.Div(id="spread-val-status", style={
+                    "color": C["muted"], "fontSize": "0.68rem", "fontFamily": FONT,
+                }),
+            ], style={"display": "flex", "alignItems": "center",
+                      "marginBottom": "0.6rem"}),
+            dcc.Loading(
+                html.Div(id="spread-valuation-table"),
+                type="dot", color=C["accent"],
+            ),
+
+            # ── Metric History controls ───────────────────────────────
+            html.Div([
+                html.Div("METRIC HISTORY", style={
+                    **LBL, "color": C["blue"], "fontSize": "0.65rem",
+                    "marginRight": "0.5rem", "alignSelf": "center",
+                }),
+                dcc.Dropdown(
+                    id="spread-metric-select",
+                    options=[
+                        {"label": "P/E (Trailing)",     "value": "pe"},
+                        {"label": "P / Sales",          "value": "ps"},
+                        {"label": "P / Book",           "value": "pb"},
+                        {"label": "EV / EBITDA",        "value": "ev_ebitda"},
+                        {"label": "EV / Revenue",       "value": "ev_revenue"},
+                        {"label": "Gross Margin %",     "value": "gross_margin"},
+                        {"label": "Operating Margin %", "value": "op_margin"},
+                        {"label": "Net Margin %",       "value": "net_margin"},
+                    ],
+                    value="pe",
+                    clearable=False,
+                    style={"width": "180px", "fontSize": "0.76rem"},
+                ),
+                html.Button("Chart History", id="spread-metric-chart-btn", n_clicks=0, style={
+                    "backgroundColor": C["blue"], "color": "#fff", "border": "none",
+                    "borderRadius": "4px", "padding": "0.32rem 0.9rem",
+                    "fontFamily": "Consolas, monospace", "fontWeight": "700",
+                    "fontSize": "0.78rem", "cursor": "pointer",
+                }),
+                html.Span(id="spread-metric-status", style={
+                    "color": C["muted"], "fontSize": "0.68rem", "fontFamily": FONT,
+                }),
+            ], style={"display": "flex", "alignItems": "center", "gap": "0.5rem",
+                      "marginTop": "0.9rem", "marginBottom": "0.5rem"}),
+            dcc.Loading(
+                html.Div(id="spread-metric-chart"),
+                type="dot", color=C["blue"],
+            ),
+        ], style={**PANEL, "marginTop": "0"}, className="theme-panel"),
+
     ], id="section-spread", style={"display": "none"})

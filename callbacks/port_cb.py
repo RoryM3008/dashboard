@@ -379,6 +379,187 @@ def _render_price_overrides_table(df, c):
                       style={"width": "100%", "borderCollapse": "collapse"})
 
 
+def _compute_stock_returns(tickers, txns_df):
+    """Fetch Yahoo Finance history and compute multi-period % returns."""
+    from datetime import datetime as _dt
+
+    if not tickers:
+        return {}
+
+    # First BUY date per ticker
+    first_buy = {}
+    if not txns_df.empty:
+        buys = txns_df[txns_df["side"] == "BUY"]
+        for ticker in tickers:
+            t_buys = buys[buys["ticker"] == ticker]
+            if not t_buys.empty:
+                raw_date = t_buys["date"].min()
+                try:
+                    first_buy[ticker] = _dt.strptime(
+                        str(raw_date).strip(), "%Y-%m-%d"
+                    ).strftime("%d-%m-%Y")
+                except Exception:
+                    first_buy[ticker] = str(raw_date)
+            else:
+                first_buy[ticker] = "—"
+
+    today = pd.Timestamp.today().normalize()
+    offsets = {
+        "1D":   today - pd.Timedelta(days=1),
+        "5D":   today - pd.Timedelta(days=5),
+        "1WK":  today - pd.Timedelta(weeks=1),
+        "1MO":  today - pd.DateOffset(months=1),
+        "3MO":  today - pd.DateOffset(months=3),
+        "6MO":  today - pd.DateOffset(months=6),
+        "12MO": today - pd.DateOffset(months=12),
+    }
+
+    start = (today - pd.DateOffset(months=15)).date()
+    end = (today + pd.Timedelta(days=1)).date()
+
+    try:
+        ticker_arg = tickers if len(tickers) > 1 else tickers[0]
+        raw = yf.download(
+            ticker_arg,
+            start=start,
+            end=end,
+            interval="1d",
+            auto_adjust=True,
+            progress=False,
+        )
+    except Exception:
+        return {
+            t: {"first_bought": first_buy.get(t, "—"), **{p: None for p in offsets}}
+            for t in tickers
+        }
+
+    result = {}
+    for ticker in tickers:
+        entry = {"first_bought": first_buy.get(ticker, "—")}
+        try:
+            if isinstance(raw.columns, pd.MultiIndex):
+                closes = raw["Close"][ticker].dropna()
+            else:
+                # single ticker — columns are not multi-level
+                closes = (
+                    raw["Close"].dropna()
+                    if "Close" in raw.columns
+                    else raw.iloc[:, 0].dropna()
+                )
+            closes.index = pd.to_datetime(closes.index).normalize()
+            closes = closes.sort_index()
+            if closes.empty or len(closes) < 2:
+                for p in offsets:
+                    entry[p] = None
+            else:
+                last = float(closes.iloc[-1])
+                for period_name, ref_date in offsets.items():
+                    before = closes[closes.index <= ref_date]
+                    if before.empty or last == 0:
+                        entry[period_name] = None
+                    else:
+                        ref_price = float(before.iloc[-1])
+                        entry[period_name] = (
+                            (last / ref_price - 1) * 100 if ref_price else None
+                        )
+        except Exception:
+            for p in offsets:
+                entry[p] = None
+        result[ticker] = entry
+
+    return result
+
+
+_RETURN_PERIODS = ["1D", "5D", "1WK", "1MO", "3MO", "6MO", "12MO"]
+
+# Maximum return used for full-saturation (values beyond this clamp to 1.0)
+_RET_SCALE_MAX = 15.0  # %
+
+
+def _ret_cell_style(val, td_base):
+    """Return a td style dict with rgba green/red background scaled to magnitude."""
+    if val is None:
+        return {**td_base, "textAlign": "right", "color": "#888888", "backgroundColor": "transparent"}
+    alpha = min(abs(val) / _RET_SCALE_MAX, 1.0)
+    # Clamp to a visible minimum so even tiny moves show a hint of colour
+    alpha = max(alpha, 0.07)
+    if val >= 0:
+        bg = f"rgba(0, 210, 100, {alpha:.2f})"
+    else:
+        bg = f"rgba(255, 50, 50, {alpha:.2f})"
+    text = "#ffffff" if alpha >= 0.35 else ("#00d264" if val >= 0 else "#ff5555")
+    return {**td_base, "textAlign": "right", "backgroundColor": bg, "color": text, "fontWeight": "600"}
+
+
+def _render_returns_table(returns_data, c):
+    """Render Bloomberg-style holdings returns table with coloured cells."""
+    if not returns_data:
+        return html.Div(
+            "No open positions.",
+            style={"color": c["muted"], "fontSize": "0.82rem", "fontFamily": FONT},
+        )
+
+    th_s = {
+        "padding": "0.3rem 0.5rem",
+        "fontSize": "0.6rem",
+        "fontWeight": "700",
+        "textTransform": "uppercase",
+        "letterSpacing": "0.05em",
+        "borderBottom": f"2px solid {c['border']}",
+        "fontFamily": FONT,
+        "color": c["muted"],
+        "whiteSpace": "nowrap",
+        "resize": "horizontal",
+        "overflow": "hidden",
+        "position": "relative",
+        "minWidth": "50px",
+    }
+    td_base = {
+        "padding": "0.3rem 0.5rem",
+        "fontSize": "0.75rem",
+        "fontFamily": FONT,
+        "borderBottom": f"1px solid {c['border']}",
+        "whiteSpace": "nowrap",
+    }
+
+    cols = ["Ticker", "First Bought"] + _RETURN_PERIODS
+    header = html.Thead(html.Tr([
+        html.Th(col, style={
+            **th_s,
+            "textAlign": "left" if col in ("Ticker", "First Bought") else "right",
+        })
+        for col in cols
+    ]))
+
+    rows = []
+    for ticker in sorted(returns_data.keys()):
+        data = returns_data[ticker]
+        cells = [
+            html.Td(ticker, style={
+                **td_base, "textAlign": "left",
+                "color": c["accent"], "fontWeight": "700",
+            }),
+            html.Td(data.get("first_bought", "—"), style={
+                **td_base, "textAlign": "left", "color": c["subtext"],
+            }),
+        ]
+        for period in _RETURN_PERIODS:
+            val = data.get(period)
+            if val is None:
+                cells.append(html.Td("—", style=_ret_cell_style(None, td_base)))
+            else:
+                cells.append(html.Td(
+                    f"{val:+.2f}%",
+                    style=_ret_cell_style(val, td_base),
+                ))
+        rows.append(html.Tr(cells))
+
+    return html.Table(
+        [header, html.Tbody(rows)],
+        style={"width": "100%", "borderCollapse": "collapse", "tableLayout": "fixed"},
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Callbacks
 # ─────────────────────────────────────────────────────────────────────────────
@@ -730,6 +911,36 @@ def register_callbacks(app):
         c = get_theme(theme_mode or "dark")
         df = list_price_overrides()
         return _render_price_overrides_table(df, c)
+
+    # ── Holdings Returns table ─────────────────────────────────────────────
+    @app.callback(
+        Output("port-returns-table", "children"),
+        Input("port-refresh-trigger", "data"),
+        Input("port-refresh", "n_clicks"),
+        State("theme-store", "data"),
+    )
+    def render_returns(trigger, n_refresh, theme_mode):
+        c = get_theme(theme_mode or "dark")
+        txns = load_transactions()
+        if txns.empty:
+            return html.Div(
+                "No transactions yet.",
+                style={"color": c["muted"], "fontSize": "0.82rem", "fontFamily": FONT},
+            )
+        hdf, _ = compute_holdings(txns)
+        active = (
+            hdf[hdf["shares"] > 0].copy()
+            if not hdf.empty and "shares" in hdf.columns
+            else pd.DataFrame()
+        )
+        if active.empty:
+            return html.Div(
+                "No open positions.",
+                style={"color": c["muted"], "fontSize": "0.82rem", "fontFamily": FONT},
+            )
+        tickers = sorted(active["ticker"].tolist())
+        returns_data = _compute_stock_returns(tickers, txns)
+        return _render_returns_table(returns_data, c)
 
     # ── 3) CSV import ─────────────────────────────────────────────────────
     @app.callback(

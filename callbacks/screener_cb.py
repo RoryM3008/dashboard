@@ -140,10 +140,10 @@ def _render_uploaded_table(df, c):
         columns.append({"name": col, "id": col, "type": col_type})
 
     def _group_key(col_name):
-        # Normalize names like "ReturnonEquity(%) 2025(Cal.)" into a metric group key.
+        # Normalize names like "ReturnonEquity(%) 2025(Cal. Yr)" into a metric group key.
+        # Strip the year AND everything that follows it (e.g. "(CAL. YR)", "(Cal.)", "E").
         clean = re.sub(r"\s+", " ", str(col_name)).strip()
-        clean = re.sub(r"\(Cal\.\)$", "", clean, flags=re.IGNORECASE).strip()
-        clean = re.sub(r"\b(FY|CY)?\s*(19|20)\d{2}$", "", clean, flags=re.IGNORECASE).strip()
+        clean = re.sub(r"\s*(FY|CY)?\s*(19|20)\d{2}.*$", "", clean, flags=re.IGNORECASE).strip()
         return clean
 
     # Count how many columns share each group key

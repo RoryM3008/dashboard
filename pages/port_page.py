@@ -1,5 +1,6 @@
 """Layout — Portfolio page: transaction ledger, holdings, performance."""
 
+import datetime
 from dash import dcc, html
 
 
@@ -239,6 +240,17 @@ def build_port_section(LBL, PANEL, C, FONT):
             html.Div(id="port-holdings-table", style={"overflowX": "auto"}),
         ], style=PANEL, className="theme-panel"),
 
+        # ── Holdings Returns ──────────────────────────────────────────────
+        html.Div([
+            html.Div("Holdings Returns", style={**LBL, "color": C["accent"],
+                     "fontSize": "0.72rem"}, className="theme-label-accent"),
+            dcc.Loading(
+                html.Div(id="port-returns-table", style={"overflowX": "auto",
+                          "marginTop": "0.4rem"}),
+                type="dot", color=C["accent"],
+            ),
+        ], style=PANEL, className="theme-panel"),
+
         # ── Cash Reconciliation ───────────────────────────────────────────
         html.Div([
             html.Div("Cash Reconciliation", style={**LBL, "color": C["accent"],
@@ -340,7 +352,7 @@ def build_port_section(LBL, PANEL, C, FONT):
                                  {"label": "Indexed (100)",      "value": "indexed"},
                                  {"label": "Drawdown",           "value": "drawdown"},
                              ],
-                             value="value", clearable=False,
+                             value="indexed", clearable=False,
                              style={"width": "220px", "fontSize": "0.82rem"}),
                 dcc.Checklist(
                     id="port-show-net-deposits",
@@ -354,6 +366,7 @@ def build_port_section(LBL, PANEL, C, FONT):
                     id="port-index-date",
                     placeholder="Start date",
                     display_format="DD-MM-YYYY",
+                    date=datetime.date(datetime.date.today().year, 1, 1).isoformat(),
                     style={"marginLeft": "0.6rem", "height": "38px", "padding": "0.32rem 0.7rem", "fontSize": "0.82rem", "fontFamily": FONT, "borderRadius": "8px"},
                 ),
                 dcc.Input(id="port-benchmark", type="text",
