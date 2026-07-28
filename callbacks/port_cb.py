@@ -1225,16 +1225,37 @@ def register_callbacks(app):
 
         tickers = active["ticker"].tolist()
 
-        # Derive first-buy dates from transaction ledger
+        # Derive first-buy dates for the *current* active position.
+        # Walk transactions chronologically: track running share count per ticker.
+        # When shares hit zero (fully closed), reset the "first buy" date.
+        # The first BUY after the last full closure is the relevant date.
         txns = load_transactions()
         first_buy = {}
         if not txns.empty:
-            buys = txns[txns["side"] == "BUY"].copy()
-            buys["date"] = pd.to_datetime(buys["date"], errors="coerce")
-            for t in tickers:
-                t_buys = buys[buys["ticker"] == t]
-                if not t_buys.empty:
-                    first_buy[t] = t_buys["date"].min()
+            txns_sorted = txns.copy()
+            txns_sorted["_dt"] = pd.to_datetime(txns_sorted["date"], errors="coerce")
+            txns_sorted = txns_sorted.sort_values("_dt")
+            _running_shares = {}
+            _first_buy_track = {}
+            for _, row in txns_sorted.iterrows():
+                t = row["ticker"]
+                if t not in set(tickers):
+                    continue
+                side = row["side"]
+                qty = float(row.get("quantity", 0) or 0)
+                if side == "BUY":
+                    prev = _running_shares.get(t, 0.0)
+                    if prev <= 1e-9:
+                        # Position was zero → this is the start of a new position
+                        _first_buy_track[t] = row["_dt"]
+                    _running_shares[t] = prev + qty
+                elif side == "SELL":
+                    prev = _running_shares.get(t, 0.0)
+                    _running_shares[t] = max(prev - qty, 0.0)
+                    if _running_shares[t] <= 1e-9:
+                        # Fully closed → reset first buy (next BUY will set it)
+                        _first_buy_track.pop(t, None)
+            first_buy = {t: dt for t, dt in _first_buy_track.items() if pd.notna(dt)}
 
         # Periods: label → yfinance period string (1D handled separately below)
         PERIODS = [
