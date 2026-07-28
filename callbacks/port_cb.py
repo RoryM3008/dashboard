@@ -1271,8 +1271,12 @@ def register_callbacks(app):
         def _pct_ret(hist):
             if hist is None or hist.empty or len(hist) < 2:
                 return None
-            start = hist["Close"].iloc[0]
-            end   = hist["Close"].iloc[-1]
+            # Flatten MultiIndex columns from yf.download (e.g. ('Close','BA'))
+            if hasattr(hist.columns, 'nlevels') and hist.columns.nlevels > 1:
+                hist = hist.droplevel(1, axis=1)
+            col = "Close" if "Close" in hist.columns else hist.columns[0]
+            start = float(hist[col].iloc[0])
+            end = float(hist[col].iloc[-1])
             if start and start != 0:
                 return (end / start - 1) * 100
             return None
