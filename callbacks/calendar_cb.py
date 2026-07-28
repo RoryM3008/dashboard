@@ -78,6 +78,7 @@ def _build_calendar_table(df, c):
         html.Th("Ticker",           style={**th_style, "minWidth": "80px"}),
         html.Th("Mkt Cap",          style={**th_style, "textAlign": "right", "minWidth": "80px"}),
         html.Th("Sector",           style={**th_style, "minWidth": "120px"}),
+        html.Th("Industry",         style={**th_style, "minWidth": "120px"}),
         html.Th("Period",           style={**th_style, "minWidth": "80px"}),
         html.Th("Timing",           style={**th_style, "minWidth": "110px"}),
         html.Th("Date Status",      style={**th_style, "minWidth": "90px"}),
@@ -122,7 +123,7 @@ def _build_calendar_table(df, c):
             rows.append(html.Tr([
                 html.Td(
                     day_label,
-                    colSpan=10,
+                    colSpan=11,
                     style={
                         "padding": "0.6rem 0.75rem 0.25rem",
                         "fontFamily": FONT,
@@ -166,6 +167,7 @@ def _build_calendar_table(df, c):
             mc_str = "—"
 
         sector_str = row.get("SECTOR") or "—"
+        industry_str = row.get("INDUSTRY") or "—"
 
         rows.append(html.Tr([
             html.Td(row.get("COMPANY_NAME") or "—",
@@ -183,6 +185,8 @@ def _build_calendar_table(df, c):
                                    "color": c["subtext"]}),
             html.Td(sector_str, style={**td_base, "color": c["subtext"],
                                        "fontSize": "0.72rem"}),
+            html.Td(industry_str, style={**td_base, "color": c["subtext"],
+                                         "fontSize": "0.72rem"}),
             html.Td(period_str, style={**td_base, "color": c["subtext"]}),
             html.Td(_market_time_badge(row.get("TIMING", "Time TBC"), c), style=td_base),
             html.Td(_confirmed_badge(row.get("CONFIRMED", False), c), style=td_base),
@@ -296,7 +300,7 @@ def register_callbacks(app):
     # ── Sector dropdown — populated from loaded data ──────────────────────────
     @app.callback(
         Output("cal-sector-dd", "options"),
-        Input("cal-data-store", "data"),
+        Input("cal-raw-store", "data"),
         prevent_initial_call=True,
     )
     def populate_sectors(store_data):
@@ -307,6 +311,21 @@ def register_callbacks(app):
             return []
         sectors = sorted(df["SECTOR"].dropna().unique().tolist())
         return [{"label": s, "value": s} for s in sectors]
+
+    # ── Industry dropdown — populated from loaded data ────────────────────────
+    @app.callback(
+        Output("cal-industry-dd", "options"),
+        Input("cal-raw-store", "data"),
+        prevent_initial_call=True,
+    )
+    def populate_industries(store_data):
+        if not store_data:
+            return []
+        df = pd.DataFrame(store_data)
+        if "INDUSTRY" not in df.columns:
+            return []
+        industries = sorted(df["INDUSTRY"].dropna().unique().tolist())
+        return [{"label": s, "value": s} for s in industries]
 
     # ── Window toggle buttons ────────────────────────────────────────────────
     @app.callback(
@@ -378,16 +397,18 @@ def register_callbacks(app):
         Output("cal-summary-strip",  "children"),
         Output("cal-status",         "children"),
         Output("cal-data-store",     "data"),
+        Output("cal-raw-store",      "data"),
         Input("cal-load-btn",        "n_clicks"),
         Input("cal-window-store",    "data"),
         Input("cal-region-store",    "data"),
         Input("cal-mktcap-store",    "data"),
         Input("cal-sector-dd",       "value"),
+        Input("cal-industry-dd",     "value"),
         State("datasource",          "data"),
         State("theme-store",         "data"),
         prevent_initial_call=True,
     )
-    def load_calendar(n_clicks, days, region, mktcap, sectors, datasource, theme_mode):
+    def load_calendar(n_clicks, days, region, mktcap, sectors, industries, datasource, theme_mode):
         c = get_theme(theme_mode or "dark")
 
         if datasource == "yf":
@@ -395,7 +416,7 @@ def register_callbacks(app):
                            style={"color": "#ff8c00", "fontSize": "0.85rem",
                                   "fontFamily": FONT, "padding": "2rem",
                                   "textAlign": "center"})
-            return msg, html.Div(), "Offline mode", {}
+            return msg, html.Div(), "Offline mode", {}, {}
 
         try:
             df = fetch_earnings_calendar(days_ahead=days or 14, region_filter=region or "ALL")
@@ -403,7 +424,16 @@ def register_callbacks(app):
             err = html.Div(f"Error loading calendar: {e}",
                            style={"color": "#ff3333", "fontSize": "0.82rem",
                                   "fontFamily": FONT, "padding": "2rem"})
-            return err, html.Div(), f"Error: {e}", {}
+            return err, html.Div(), f"Error: {e}", {}, {}
+
+        # Serialise raw (unfiltered) data for dropdown population
+        raw_data = df.to_dict("records") if not df.empty else []
+        for rec in raw_data:
+            for k, v in rec.items():
+                if hasattr(v, "isoformat"):
+                    rec[k] = str(v)
+                elif v is not None and not isinstance(v, (str, int, float, bool)):
+                    rec[k] = str(v)
 
         # ── Apply market cap filter ───────────────────────────────────────
         if mktcap and mktcap != "ALL" and "MKT_CAP_M" in df.columns:
@@ -425,15 +455,18 @@ def register_callbacks(app):
         if sectors and "SECTOR" in df.columns:
             df = df[df["SECTOR"].isin(sectors)]
 
+        # ── Apply industry filter ─────────────────────────────────────────
+        if industries and "INDUSTRY" in df.columns:
+            df = df[df["INDUSTRY"].isin(industries)]
+
         table = _build_calendar_table(df, c)
         strip = _build_summary_strip(df, days, c)
 
         now = datetime.datetime.now().strftime("%d %b %Y %H:%M")
         status = f"{len(df)} events · Updated {now}"
 
-        # Serialise for download
+        # Serialise filtered data for download
         store_data = df.to_dict("records") if not df.empty else []
-        # Convert dates/timestamps to strings for JSON
         for rec in store_data:
             for k, v in rec.items():
                 if hasattr(v, "isoformat"):
@@ -441,7 +474,7 @@ def register_callbacks(app):
                 elif v is not None and not isinstance(v, (str, int, float, bool)):
                     rec[k] = str(v)
 
-        return table, strip, status, store_data
+        return table, strip, status, store_data, raw_data
 
     # ── Download ──────────────────────────────────────────────────────────────
     @app.callback(

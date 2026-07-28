@@ -19,6 +19,7 @@ def build_calendar_section(LBL, PANEL, C, FONT):
 
     return html.Div([
         dcc.Store(id="cal-data-store", data={}),
+        dcc.Store(id="cal-raw-store", data={}),
         dcc.Store(id="cal-window-store", data=14),
         dcc.Store(id="cal-region-store", data="ALL"),
         dcc.Store(id="cal-mktcap-store", data="ALL"),
@@ -84,6 +85,23 @@ def build_calendar_section(LBL, PANEL, C, FONT):
                         value=[],
                         multi=True,
                         placeholder="All sectors",
+                        clearable=True,
+                        style={"width": "260px", "fontSize": "0.75rem",
+                               "backgroundColor": C["bg"],
+                               "border": f"1px solid {C['border']}"},
+                    ),
+                ], style={"marginRight": "1.5rem"}),
+
+                # Industry multi-select dropdown
+                html.Div([
+                    html.Div("Industry", style={**LBL, "marginBottom": "0.2rem",
+                             "fontSize": "0.65rem"}, className="theme-label"),
+                    dcc.Dropdown(
+                        id="cal-industry-dd",
+                        options=[],
+                        value=[],
+                        multi=True,
+                        placeholder="All industries",
                         clearable=True,
                         style={"width": "260px", "fontSize": "0.75rem",
                                "backgroundColor": C["bg"],

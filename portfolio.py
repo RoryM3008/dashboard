@@ -221,6 +221,106 @@ def clear_cash_override():
         con.execute("DELETE FROM cash_override")
 
 
+# ── Holdings override (manual share count adjustments) ────────────────────────
+
+def _init_holdings_override_table():
+    """Create the holdings_override table if needed."""
+    with _conn() as con:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS holdings_override (
+                ticker TEXT PRIMARY KEY,
+                shares REAL NOT NULL,
+                notes  TEXT DEFAULT ''
+            )
+        """)
+
+
+def set_holdings_override(ticker, shares, notes=""):
+    """Set a manual share count override for a ticker.
+    Use shares=0 to force a position to zero (e.g. rounding remnants).
+    """
+    _init_holdings_override_table()
+    ticker = (ticker or "").upper().strip()
+    if not ticker:
+        return
+    with _conn() as con:
+        con.execute(
+            "INSERT OR REPLACE INTO holdings_override (ticker, shares, notes) VALUES (?, ?, ?)",
+            (ticker, float(shares), notes or ""),
+        )
+
+
+def delete_holdings_override(ticker):
+    """Remove a holdings override for a ticker (revert to calculated)."""
+    _init_holdings_override_table()
+    with _conn() as con:
+        con.execute("DELETE FROM holdings_override WHERE ticker = ?",
+                    ((ticker or "").upper().strip(),))
+
+
+def clear_all_holdings_overrides():
+    """Remove all holdings overrides."""
+    _init_holdings_override_table()
+    with _conn() as con:
+        con.execute("DELETE FROM holdings_override")
+
+
+def list_holdings_overrides():
+    """Return all holdings overrides as a DataFrame."""
+    _init_holdings_override_table()
+    with _conn() as con:
+        return pd.read_sql(
+            "SELECT ticker, shares, notes FROM holdings_override ORDER BY ticker", con
+        )
+
+
+def _get_holdings_override_map():
+    """Return dict {TICKER: shares} for all overrides."""
+    _init_holdings_override_table()
+    with _conn() as con:
+        rows = con.execute("SELECT ticker, shares FROM holdings_override").fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+# ── ISIN map (ticker → ISIN, persisted in SQLite) ────────────────────────────
+
+def _init_isin_table():
+    with _conn() as con:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS ticker_isin (
+                ticker TEXT PRIMARY KEY,
+                isin   TEXT NOT NULL
+            )
+        """)
+
+
+def get_isin_map() -> dict:
+    """Return {TICKER: ISIN} for all stored mappings."""
+    _init_isin_table()
+    with _conn() as con:
+        rows = con.execute("SELECT ticker, isin FROM ticker_isin").fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def set_isin(ticker: str, isin: str):
+    """Store or update the ISIN for a ticker."""
+    _init_isin_table()
+    ticker = ticker.upper().strip()
+    isin = isin.upper().strip()
+    with _conn() as con:
+        con.execute(
+            "INSERT OR REPLACE INTO ticker_isin (ticker, isin) VALUES (?, ?)",
+            (ticker, isin),
+        )
+
+
+def delete_isin(ticker: str):
+    """Remove an ISIN mapping."""
+    _init_isin_table()
+    with _conn() as con:
+        con.execute("DELETE FROM ticker_isin WHERE ticker = ?", (ticker.upper().strip(),))
+
+
 def _init_price_override_table():
     """Create the manual underlying price override table if needed."""
     with _conn() as con:
@@ -576,6 +676,20 @@ def compute_holdings(txns_df, last_prices=None):
      total_buy_cost, total_sell_proceeds, total_fees) = _fifo_lots(txns_df)
     net_invested = total_dep - total_wth
     total_dividends = sum(dividends.values())
+
+    # Apply manual holdings overrides (e.g. zero out rounding remnants)
+    _h_overrides = _get_holdings_override_map()
+    for ovr_ticker, ovr_shares in _h_overrides.items():
+        if ovr_shares <= 0:
+            # Force position to zero — remove from open lots
+            lots.pop(ovr_ticker, None)
+        elif ovr_ticker in lots and lots[ovr_ticker]:
+            # Adjust to the overridden share count (scale existing lots)
+            current_shares = sum(l[0] for l in lots[ovr_ticker])
+            if current_shares > 0:
+                ratio = ovr_shares / current_shares
+                for lot in lots[ovr_ticker]:
+                    lot[0] *= ratio
 
     # Build holdings rows
     tickers = sorted(set(t for t, l in lots.items() if l))  # only open positions

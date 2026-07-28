@@ -146,13 +146,41 @@ def search_tickers(query, limit=15):
 
 
 def _to_factset_ticker(yahoo_ticker: str) -> str:
-    """Convert a Yahoo-style ticker to FactSet TICKER_REGION format."""
+    """Convert a Yahoo-style ticker to FactSet TICKER_REGION format.
+
+    Yahoo uses dot-suffixes for exchanges (e.g. CSPX.L = London, DSY.PA = Paris).
+    FactSet uses hyphen-region (e.g. CSPX-GB, DSY-FR).
+    """
     t = yahoo_ticker.strip().upper()
     if t in _TICKER_MAP:
         return _TICKER_MAP[t]
-    # Already has a region suffix like "VOD-GB"?
+    # Already has a FactSet region suffix like "VOD-GB"?
     if "-" in t:
         return t
+    # Handle Yahoo exchange dot-suffixes → FactSet region codes
+    _YAHOO_EXCHANGE_MAP = {
+        ".L":   "GB",   # London Stock Exchange
+        ".PA":  "FR",   # Euronext Paris
+        ".DE":  "DE",   # Frankfurt / XETRA
+        ".AS":  "NL",   # Euronext Amsterdam
+        ".MC":  "ES",   # Bolsa Madrid
+        ".MI":  "IT",   # Borsa Italiana
+        ".BR":  "BE",   # Euronext Brussels
+        ".SW":  "CH",   # SIX Swiss Exchange
+        ".HK":  "HK",   # Hong Kong
+        ".T":   "JP",   # Tokyo
+        ".AX":  "AU",   # ASX Australia
+        ".TO":  "CA",   # Toronto
+        ".V":   "CA",   # TSX Venture
+        ".SI":  "SG",   # Singapore
+        ".KS":  "KR",   # Korea
+        ".SS":  "CN",   # Shanghai
+        ".SZ":  "CN",   # Shenzhen
+    }
+    for suffix, region in _YAHOO_EXCHANGE_MAP.items():
+        if t.endswith(suffix):
+            base = t[: -len(suffix)]
+            return f"{base}-{region}"
     return f"{t}-{_DEFAULT_REGION}"
 
 
@@ -163,6 +191,58 @@ def _from_factset_ticker(fs_ticker: str, original: str) -> str:
         if fs == fs_ticker:
             return yahoo
     return original
+
+
+def fetch_msci_constituents(msci_code, gics_sector=None):
+    """
+    Fetch current constituents of an MSCI index by numeric code.
+    Returns a list of FactSet-style TICKER_REGION strings (e.g. 'AAPL-US').
+
+    Parameters
+    ----------
+    msci_code : int
+        MSCI index code (e.g. 990100 for MSCI World).
+    gics_sector : int or None
+        If provided, filter constituents to this GICS sector code
+        (e.g. 30 = Consumer Staples). Used for sector indices that are not
+        stored as separate codes in the database.
+    """
+    sector_filter = ""
+    if gics_sector is not None:
+        sector_filter = f"AND sec.SECTOR = {int(gics_sector)}"
+
+    sql = f"""
+    SELECT DISTINCT tr.TICKER_REGION
+    FROM MSCI.INDEX.INDEX_CONSTITUENTS ic
+    JOIN MSCI.INDEX.SECURITY sec
+        ON sec.MSCI_SECURITY_CODE = ic.MSCI_SECURITY_CODE
+        AND sec.CALC_DATE = ic.CALC_DATE
+    JOIN FACTSET.SYM_V1.SYM_ISIN si ON si.ISIN = sec.ISIN
+    JOIN FACTSET.SYM_V1.SYM_COVERAGE cov
+        ON cov.FSYM_SECURITY_ID = si.FSYM_ID
+        AND cov.SECURITY_FLAG = TRUE
+    JOIN FACTSET.SYM_V1.SYM_TICKER_REGION tr ON tr.FSYM_ID = cov.FSYM_REGIONAL_ID
+    WHERE ic.MSCI_INDEX_CODE = {int(msci_code)}
+      AND ic.CALC_DATE = (
+          SELECT MAX(CALC_DATE)
+          FROM MSCI.INDEX.INDEX_CONSTITUENTS
+          WHERE MSCI_INDEX_CODE = {int(msci_code)}
+      )
+      AND sec.ISIN IS NOT NULL
+      AND tr.TICKER_REGION IS NOT NULL
+      AND cov.FSYM_REGIONAL_ID IS NOT NULL
+      {sector_filter}
+    ORDER BY tr.TICKER_REGION
+    """
+    try:
+        conn = _get_connection()
+        cur = conn.cursor()
+        cur.execute(f"USE WAREHOUSE {SF_WAREHOUSE}")
+        cur.execute(sql)
+        rows = cur.fetchall()
+        return [r[0] for r in rows if r[0]]
+    except Exception:
+        return []
 
 
 # ── MSCI index helpers ────────────────────────────────────────────────────────
@@ -635,6 +715,16 @@ def fetch_valuation_history(fsym_id, years=10):
             -- Valuation multiples
             b.FF_PE           AS "P/E",
             b.FF_PSALES       AS "P/S",
+            -- NOTE: FF_*_DER_LTM tables used here do not expose enterprise value
+            -- or net debt fields, so EV-based ratios are approximated using market
+            -- value as denominator/numerator proxy for historical continuity.
+            b.FF_PSALES       AS "EV/S",
+            CASE WHEN b.FF_EBITDA_OPER <> 0
+                 THEN b.FF_MKT_VAL / b.FF_EBITDA_OPER
+            END               AS "EV/EBITDA",
+            CASE WHEN b.FF_EBIT_OPER <> 0
+                 THEN b.FF_MKT_VAL / b.FF_EBIT_OPER
+            END               AS "EV/EBIT",
             b.FF_PCF          AS "P/CF",
             b.FF_PAY_OUT_RATIO AS "Payout Ratio %",
             -- Margin metrics (LTM)
@@ -656,7 +746,13 @@ def fetch_valuation_history(fsym_id, years=10):
             a.FF_DPS_GR           AS "DPS Growth %",
             b.FF_CAPEX_SALES      AS "Capex % Sales",
             a.FF_CF_SALES         AS "CF % Sales",
-            a.FF_TAX_RATE         AS "Tax Rate %"
+            a.FF_TAX_RATE         AS "Tax Rate %",
+            CASE WHEN b.FF_MKT_VAL <> 0
+                 THEN b.FF_OPER_CF / b.FF_MKT_VAL * 100
+            END               AS "CFO/EV %",
+            CASE WHEN b.FF_MKT_VAL <> 0
+                 THEN (b.FF_OPER_CF - ABS(b.FF_CAPEX)) / b.FF_MKT_VAL * 100
+            END               AS "FCFF/EV %"
         FROM FACTSET.FF_V3.FF_BASIC_DER_LTM b
         LEFT JOIN FACTSET.FF_V3.FF_ADVANCED_DER_LTM a
             ON b.FSYM_ID = a.FSYM_ID AND b.DATE = a.DATE
@@ -1556,8 +1652,13 @@ def fetch_movers_sf(ticker_list, n=10, prefix="$"):
     if not rows:
         return pd.DataFrame(), pd.DataFrame()
     result = pd.DataFrame(rows).sort_values("_chg", ascending=False)
-    gainers = result.head(n).reset_index(drop=True)
-    losers = result.tail(n).sort_values("_chg").reset_index(drop=True)
+    # Ensure gainers/losers are non-overlapping. If n is too large relative
+    # to universe size, cap each side at floor(N/2).
+    n_each = min(int(n), len(result) // 2)
+    if n_each <= 0:
+        n_each = min(int(n), len(result))
+    gainers = result.head(n_each).reset_index(drop=True)
+    losers = result.tail(n_each).sort_values("_chg").reset_index(drop=True)
     return gainers, losers
 
 
@@ -2272,6 +2373,7 @@ def fetch_earnings_calendar(days_ahead: int = 14, region_filter: str = "ALL") ->
                 ON cov.FSYM_PRIMARY_EQUITY_ID = se.FSYM_ID
                AND cov.REGIONAL_FLAG = TRUE
                AND cov.UNIVERSE_TYPE  = 'EQ'
+               AND cov.FREF_SECURITY_TYPE IN ('SHARE', 'PREFEQ', 'ADR', 'GDR', 'NVDR')
             JOIN FACTSET.SYM_V1.SYM_TICKER_REGION tr
                 ON tr.FSYM_ID = cov.FSYM_ID
             {region_clause}
@@ -2295,12 +2397,15 @@ def fetch_earnings_calendar(days_ahead: int = 14, region_filter: str = "ALL") ->
         with_sector AS (
             SELECT
                 wm.*,
-                sec_map.FACTSET_SECTOR_DESC AS SECTOR
+                sec_map.FACTSET_SECTOR_DESC AS SECTOR,
+                ind_map.FACTSET_INDUSTRY_DESC AS INDUSTRY
             FROM with_mktcap wm
             LEFT JOIN FACTSET.SYM_V1.SYM_ENTITY_SECTOR es
                 ON es.FACTSET_ENTITY_ID = wm.FACTSET_ENTITY_ID
             LEFT JOIN FACTSET.REF_V2.FACTSET_SECTOR_MAP sec_map
                 ON sec_map.FACTSET_SECTOR_CODE = es.SECTOR_CODE
+            LEFT JOIN FACTSET.REF_V2.FACTSET_INDUSTRY_MAP ind_map
+                ON ind_map.FACTSET_INDUSTRY_CODE = es.INDUSTRY_CODE
         ),
         ntm_eps AS (
             SELECT FSYM_ID, FE_MEAN AS EPS_CONSENSUS, FE_NUM_EST AS EPS_NUM_EST, CURRENCY,
@@ -2333,6 +2438,7 @@ def fetch_earnings_calendar(days_ahead: int = 14, region_filter: str = "ALL") ->
             ws.COMPANY_NAME,
             ws.MKT_CAP_M,
             ws.SECTOR,
+            ws.INDUSTRY,
             eps.EPS_CONSENSUS,
             sales.SALES_CONSENSUS,
             eps.EPS_NUM_EST,
@@ -2347,7 +2453,7 @@ def fetch_earnings_calendar(days_ahead: int = 14, region_filter: str = "ALL") ->
     rows = cur.fetchall()
     cols = ["EVENT_DATE", "MARKET_TIME", "TITLE", "FISCAL_PERIOD", "FISCAL_YEAR",
             "PROJECTED", "FSYM_ID", "TICKER_REGION", "TICKER", "COMPANY_NAME",
-            "MKT_CAP_M", "SECTOR",
+            "MKT_CAP_M", "SECTOR", "INDUSTRY",
             "EPS_CONSENSUS", "SALES_CONSENSUS", "EPS_NUM_EST", "CURRENCY"]
     df = pd.DataFrame(rows, columns=cols)
 
@@ -2361,5 +2467,643 @@ def fetch_earnings_calendar(days_ahead: int = 14, region_filter: str = "ALL") ->
             "S": "After Close", "U": "Time TBC",
         }).fillna("Time TBC")
         df["CONFIRMED"] = ~df["PROJECTED"].astype(bool)
+
+    return df
+
+
+# ── Factor Tilt functions ─────────────────────────────────────────────────────
+
+# Style factor definitions for GEMLTL model
+GEMLTL_STYLE_FACTORS = {
+    "GEMLT_BETA":     "Beta",
+    "GEMLT_BTOP":     "Book-to-Price",
+    "GEMLT_DIVYILD":  "Dividend Yield",
+    "GEMLT_EARNQLTY": "Earnings Quality",
+    "GEMLT_EARNVAR":  "Earnings Variability",
+    "GEMLT_EARNYILD": "Earnings Yield",
+    "GEMLT_GROWTH":   "Growth",
+    "GEMLT_INVSQLTY": "Investment Quality",
+    "GEMLT_LEVERAGE": "Leverage",
+    "GEMLT_LIQUIDTY": "Liquidity",
+    "GEMLT_LTREVRSL": "Long-Term Reversal",
+    "GEMLT_MIDCAP":   "Mid Cap",
+    "GEMLT_MOMENTUM": "Momentum",
+    "GEMLT_PROFIT":   "Profitability",
+    "GEMLT_RESVOL":   "Residual Volatility",
+    "GEMLT_SIZE":     "Size",
+}
+
+
+def fetch_portfolio_factor_snapshot(
+    holdings_dict: dict,
+    model: str = "GEMLTL",
+    factors: list = None,
+    isin_override: dict = None,
+) -> pd.DataFrame:
+    """Compute weighted-average Barra style factor exposures for a portfolio snapshot.
+
+    Parameters
+    ----------
+    holdings_dict : dict
+        {yahoo_ticker: weight_pct} e.g. {'AAPL': 25.3, 'MSFT': 18.2}
+    model : str
+        Barra model, default 'GEMLTL'.
+    factors : list[str] or None
+        FACTOR codes to include. None = all Risk Indices.
+    isin_override : dict or None
+        {TICKER: ISIN} — these ISINs are used directly, bypassing the
+        FactSet ticker lookup for those tickers.
+
+    Returns
+    -------
+    DataFrame with columns:
+        FACTOR, FACTOR_NAME, PORTFOLIO_SCORE, COVERAGE_PCT,
+        MATCHED_TICKERS, UNMATCHED_TICKERS
+    """
+    if not holdings_dict:
+        return pd.DataFrame()
+
+    conn = _get_connection()
+    cur = conn.cursor()
+    cur.execute(f"USE WAREHOUSE {SF_WAREHOUSE}")
+
+    isin_override = isin_override or {}
+
+    # ── Step 1: resolve tickers → ISIN ───────────────────────────────────
+    # Use stored ISINs first; fall back to FactSet lookup for the rest.
+    ticker_isin = {}
+
+    # Apply stored overrides immediately
+    for ticker, weight in holdings_dict.items():
+        stored_isin = isin_override.get(ticker.upper())
+        if stored_isin:
+            ticker_isin[ticker] = {"isin": stored_isin, "weight": weight}
+
+    # FactSet lookup for tickers not covered by stored ISINs
+    need_lookup = [t for t in holdings_dict if t not in ticker_isin]
+    if need_lookup:
+        fs_tickers = {t: _to_factset_ticker(t) for t in need_lookup}
+        fs_list = list(set(fs_tickers.values()))
+        ph = ", ".join("'{}'".format(t) for t in fs_list)
+
+        cur.execute("""
+            SELECT tr.TICKER_REGION, si.ISIN
+            FROM FACTSET.SYM_V1.SYM_TICKER_REGION tr
+            JOIN FACTSET.SYM_V1.SYM_COVERAGE cov ON cov.FSYM_ID = tr.FSYM_ID
+            JOIN FACTSET.SYM_V1.SYM_ISIN si
+                ON si.FSYM_ID = COALESCE(cov.FSYM_PRIMARY_EQUITY_ID, tr.FSYM_ID)
+            WHERE tr.TICKER_REGION IN ({})
+              AND si.ISIN IS NOT NULL
+            QUALIFY ROW_NUMBER() OVER (
+                PARTITION BY tr.TICKER_REGION
+                ORDER BY (CASE WHEN si.ISIN LIKE 'US%' THEN 0 ELSE 1 END), si.ISIN
+            ) = 1
+        """.format(ph))
+        fs_to_isin = {r[0]: r[1] for r in cur.fetchall()}
+
+        # Fallback: SYM_ISIN_HIST for anything still unresolved
+        unresolved = [t for t in fs_list if t not in fs_to_isin]
+        if unresolved:
+            ph2 = ", ".join("'{}'".format(t) for t in unresolved)
+            cur.execute("""
+                SELECT tr.TICKER_REGION, si.ISIN
+                FROM FACTSET.SYM_V1.SYM_TICKER_REGION tr
+                JOIN FACTSET.SYM_V1.SYM_ISIN_HIST si ON si.FSYM_ID = tr.FSYM_ID
+                WHERE tr.TICKER_REGION IN ({})
+                  AND si.ISIN IS NOT NULL
+                QUALIFY ROW_NUMBER() OVER (
+                    PARTITION BY tr.TICKER_REGION
+                    ORDER BY si.END_DATE DESC NULLS FIRST, si.ISIN
+                ) = 1
+            """.format(ph2))
+            for r in cur.fetchall():
+                if r[0] not in fs_to_isin:
+                    fs_to_isin[r[0]] = r[1]
+
+        for orig_ticker in need_lookup:
+            fs_t = fs_tickers[orig_ticker]
+            isin = fs_to_isin.get(fs_t)
+            if isin:
+                ticker_isin[orig_ticker] = {"isin": isin, "weight": holdings_dict[orig_ticker]}
+
+    if not ticker_isin:
+        return pd.DataFrame()
+
+    matched_tickers = sorted(ticker_isin.keys())
+    unmatched_tickers = sorted(
+        t for t in holdings_dict if t not in ticker_isin
+    )
+
+    # Total weight of matched positions
+    total_weight = sum(v["weight"] for v in ticker_isin.values())
+    coverage_pct = total_weight / sum(holdings_dict.values()) * 100 if holdings_dict else 0
+
+    # ── Step 2: ISIN → BARRA_ID → latest factor exposures ───────────────
+    isin_list = [v["isin"] for v in ticker_isin.values()]
+    isin_ph = ", ".join(f"'{i}'" for i in isin_list)
+
+    factor_clause = ""
+    if factors:
+        flist = ", ".join(f"'{f}'" for f in factors)
+        factor_clause = f"AND exp.FACTOR IN ({flist})"
+
+    # Build VALUES clause for weights: (ISIN, WEIGHT)
+    weights_vals = ", ".join(
+        "('{}', {})".format(v["isin"], v["weight"])
+        for v in ticker_isin.values()
+    )
+
+    # Build ticker-to-isin VALUES for matched/unmatched lookup
+    ticker_isin_vals = ", ".join(
+        "('{}', '{}')".format(orig, v["isin"])
+        for orig, v in ticker_isin.items()
+    )
+
+    sql = f"""
+    WITH holdings AS (
+        SELECT column1 AS ISIN, column2 AS WEIGHT
+        FROM VALUES {weights_vals}
+    ),
+    with_barra AS (
+        SELECT h.ISIN, h.WEIGHT, sec.BARRA_ID
+        FROM holdings h
+        JOIN MSCI.INDEX.SECURITY sec ON sec.ISIN = h.ISIN
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY h.ISIN ORDER BY sec.CALC_DATE DESC) = 1
+    ),
+    latest_date AS (
+        SELECT MAX(DATE_OF_DATA) AS MAX_DATE
+        FROM MSCI.ANALYTICS.ASSET_EXPOSURES_TS
+        WHERE MODEL = '{model}'
+          AND FACTOR_GROUP = 'Risk Indices'
+    ),
+    exposures AS (
+        SELECT
+            wb.ISIN,
+            wb.WEIGHT,
+            exp.FACTOR,
+            exp.FACTOR_NAME,
+            exp.EXPOSURE
+        FROM with_barra wb
+        CROSS JOIN latest_date ld
+        JOIN MSCI.ANALYTICS.ASSET_EXPOSURES_TS exp
+            ON exp.BARRA_ID = wb.BARRA_ID
+           AND exp.DATE_OF_DATA = ld.MAX_DATE
+           AND exp.MODEL = '{model}'
+           AND exp.FACTOR_GROUP = 'Risk Indices'
+           {factor_clause}
+    )
+    SELECT
+        FACTOR,
+        FACTOR_NAME,
+        SUM(WEIGHT * EXPOSURE) / NULLIF(SUM(WEIGHT), 0) AS PORTFOLIO_SCORE
+    FROM exposures
+    GROUP BY FACTOR, FACTOR_NAME
+    ORDER BY FACTOR_NAME
+    """
+
+    cur.execute(sql)
+    rows = cur.fetchall()
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows, columns=["FACTOR", "FACTOR_NAME", "PORTFOLIO_SCORE"])
+    df["PORTFOLIO_SCORE"] = pd.to_numeric(df["PORTFOLIO_SCORE"], errors="coerce")
+    df["COVERAGE_PCT"] = round(coverage_pct, 1)
+    df["MATCHED_TICKERS"] = ", ".join(matched_tickers)
+    df["UNMATCHED_TICKERS"] = ", ".join(unmatched_tickers)
+    return df
+
+
+def fetch_fund_list() -> pd.DataFrame:
+    """Return list of MIF funds that have MSCI-matchable equity holdings.
+
+    Returns DataFrame: MIL_FUND_KEY, FUND_NAME, FUND_CODE, FUND_ASSET_CLASS, FUND_CURRENCY
+    Filters to CURRENT_ROW_INDICATOR=1 (active records only).
+    """
+    conn = _get_connection()
+    cur = conn.cursor()
+    cur.execute(f"USE WAREHOUSE {SF_WAREHOUSE}")
+    cur.execute("""
+        SELECT DISTINCT
+            f.MIL_FUND_KEY,
+            f.FUND_NAME,
+            f.FUND_CODE,
+            f.FUND_ASSET_CLASS,
+            f.FUND_CURRENCY
+        FROM PROD_MED_DATAHUB.DIMENSIONAL_WAREHOUSE.MIL_FUND_POSITION p
+        JOIN PROD_MED_DATAHUB.DIMENSIONAL_WAREHOUSE.MIL_FUND_DIMENSION f
+            ON f.MIL_FUND_KEY = p.MIL_FUND_KEY
+           AND f.CURRENT_ROW_INDICATOR = 1
+        WHERE f.FUND_NAME IS NOT NULL
+        ORDER BY f.FUND_NAME
+    """)
+    rows = cur.fetchall()
+    cols = ["MIL_FUND_KEY", "FUND_NAME", "FUND_CODE", "FUND_ASSET_CLASS", "FUND_CURRENCY"]
+    return pd.DataFrame(rows, columns=cols)
+
+
+def fetch_factor_tilt_history(
+    fund_key: int,
+    model: str = "GEMLTL",
+    factors: list = None,
+    start_date: str = "2022-01-01",
+    end_date: str = None,
+) -> pd.DataFrame:
+    """Compute portfolio weighted-average Barra factor exposures over time.
+
+    For each month-end date in the fund's history:
+      1. Get equity positions (ISIN + weight)
+      2. Join to MSCI SECURITY table to get BARRA_ID
+      3. Join to ASSET_EXPOSURES_TS for factor exposures
+      4. Compute weighted average exposure per factor
+
+    Parameters
+    ----------
+    fund_key : int
+        MIL_FUND_KEY identifier.
+    model : str
+        Barra model name, default 'GEMLTL'.
+    factors : list[str] or None
+        List of FACTOR codes to filter (e.g. ['GEMLT_GROWTH', 'GEMLT_MOMENTUM']).
+        None = all Risk Indices style factors.
+    start_date : str
+        ISO date string, default '2022-01-01'.
+    end_date : str or None
+        ISO date string, default today.
+
+    Returns
+    -------
+    DataFrame with columns: DATE, FACTOR, FACTOR_NAME, PORTFOLIO_SCORE, COVERAGE_PCT
+    """
+    import datetime as _dt
+    if end_date is None:
+        end_date = str(_dt.date.today())
+
+    factor_clause = ""
+    if factors:
+        flist = ", ".join(f"'{f}'" for f in factors)
+        factor_clause = f"AND exp.FACTOR IN ({flist})"
+
+    sql = f"""
+    WITH positions AS (
+        SELECT
+            d.CALENDAR_DATE,
+            inst.ISIN_INSTRUMENT_REFERENCE    AS ISIN,
+            p.FA_MIL_FUND_ACTUAL_WEIGHT_PCNT  AS WEIGHT
+        FROM PROD_MED_DATAHUB.DIMENSIONAL_WAREHOUSE.MIL_FUND_POSITION p
+        JOIN PROD_MED_DATAHUB.DIMENSIONAL_WAREHOUSE.DATE_DIMENSION d
+            ON d.DATE_KEY = p.POSITION_DATE_KEY
+        JOIN PROD_MED_DATAHUB.DIMENSIONAL_WAREHOUSE.MIL_FUND_DIMENSION f
+            ON f.MIL_FUND_KEY = p.MIL_FUND_KEY
+           AND f.CURRENT_ROW_INDICATOR = 1
+        JOIN PROD_MED_DATAHUB.DIMENSIONAL_WAREHOUSE.INSTRUMENT_DIMENSION inst
+            ON inst.INSTRUMENT_KEY = p.INSTRUMENT_KEY
+           AND inst.CURRENT_ROW_INDICATOR = 1
+        WHERE p.MIL_FUND_KEY = {int(fund_key)}
+          AND d.CALENDAR_DATE BETWEEN '{start_date}' AND '{end_date}'
+          AND LAST_DAY(d.CALENDAR_DATE) = d.CALENDAR_DATE
+          AND inst.ISIN_INSTRUMENT_REFERENCE IS NOT NULL
+          AND p.FA_MIL_FUND_ACTUAL_WEIGHT_PCNT > 0
+    ),
+    with_barra AS (
+        SELECT
+            pos.CALENDAR_DATE,
+            pos.WEIGHT,
+            sec.BARRA_ID
+        FROM positions pos
+        JOIN MSCI.INDEX.SECURITY sec
+            ON sec.ISIN = pos.ISIN
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY pos.CALENDAR_DATE, pos.ISIN
+            ORDER BY sec.CALC_DATE DESC
+        ) = 1
+    ),
+    exposures AS (
+        SELECT
+            wb.CALENDAR_DATE,
+            exp.FACTOR,
+            exp.FACTOR_NAME,
+            wb.WEIGHT,
+            exp.EXPOSURE
+        FROM with_barra wb
+        JOIN MSCI.ANALYTICS.ASSET_EXPOSURES_TS exp
+            ON exp.BARRA_ID = wb.BARRA_ID
+           AND exp.DATE_OF_DATA = wb.CALENDAR_DATE
+           AND exp.MODEL = '{model}'
+           AND exp.FACTOR_GROUP = 'Risk Indices'
+           {factor_clause}
+    ),
+    coverage AS (
+        SELECT
+            CALENDAR_DATE,
+            SUM(WEIGHT) AS TOTAL_MATCHED_WEIGHT
+        FROM with_barra
+        GROUP BY CALENDAR_DATE
+    ),
+    total_weight AS (
+        SELECT
+            CALENDAR_DATE,
+            SUM(WEIGHT) AS TOTAL_WEIGHT
+        FROM positions
+        GROUP BY CALENDAR_DATE
+    )
+    SELECT
+        e.CALENDAR_DATE         AS DATE,
+        e.FACTOR,
+        e.FACTOR_NAME,
+        SUM(e.WEIGHT * e.EXPOSURE) / NULLIF(SUM(e.WEIGHT), 0) AS PORTFOLIO_SCORE,
+        c.TOTAL_MATCHED_WEIGHT / NULLIF(tw.TOTAL_WEIGHT, 0) * 100 AS COVERAGE_PCT
+    FROM exposures e
+    JOIN coverage c   ON c.CALENDAR_DATE = e.CALENDAR_DATE
+    JOIN total_weight tw ON tw.CALENDAR_DATE = e.CALENDAR_DATE
+    GROUP BY e.CALENDAR_DATE, e.FACTOR, e.FACTOR_NAME, c.TOTAL_MATCHED_WEIGHT, tw.TOTAL_WEIGHT
+    ORDER BY e.CALENDAR_DATE, e.FACTOR
+    """
+
+    conn = _get_connection()
+    cur = conn.cursor()
+    cur.execute(f"USE WAREHOUSE {SF_WAREHOUSE}")
+    cur.execute(sql)
+    rows = cur.fetchall()
+    cols = ["DATE", "FACTOR", "FACTOR_NAME", "PORTFOLIO_SCORE", "COVERAGE_PCT"]
+    df = pd.DataFrame(rows, columns=cols)
+    if not df.empty:
+        df["DATE"] = pd.to_datetime(df["DATE"])
+        df["PORTFOLIO_SCORE"] = pd.to_numeric(df["PORTFOLIO_SCORE"], errors="coerce")
+        df["COVERAGE_PCT"] = pd.to_numeric(df["COVERAGE_PCT"], errors="coerce")
+    return df
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Comps Table — LTM + 1BF/2BF consensus for a list of fsym_ids
+# ─────────────────────────────────────────────────────────────────────────────
+
+def fetch_comps_table(fsym_ids: list) -> pd.DataFrame:
+    """Return a wide DataFrame for a Comps Table page.
+
+    For each fsym_id, returns LTM + 1BF (FY1) + 2BF (FY2) snapshots of:
+      - Mkt Cap (USD mn), EV (USD mn)
+      - P/E LTM / 1BF / 2BF
+      - P/B LTM / 1BF / 2BF
+      - EV/EBITDA LTM / 1BF / 2BF
+      - ROE LTM / 1BF / 2BF
+      - PEG (FY1 P/E / 2-year EPS CAGR)
+      - EPS Growth (FY1 → FY2)
+      - OPM LTM / 1BF
+      - Dividend Yield LTM / 1BF
+
+    All native amounts (MKT_CAP, EV) are converted to USD millions using
+    spot FX from MSCI.INDEX.CURRENCY_EXCHANGE_RATES.
+    """
+    if not fsym_ids:
+        return pd.DataFrame()
+
+    conn = _get_connection()
+    cur = conn.cursor()
+    cur.execute(f"USE WAREHOUSE {SF_WAREHOUSE}")
+
+    ids_str = ", ".join(f"'{fid}'" for fid in fsym_ids)
+
+    # ── 1) LTM fundamentals + most recent annual + latest price ─────────
+    #     FF_BASIC_DER_LTM  → MktCap, P/E, OPM, EBITDA, EPS, currency
+    #     FF_ADVANCED_DER_LTM → Div Yield, EBIT margin (OPM proxy)
+    #     FF_BASIC_DER_AF   → P/B, ROE, Net Debt, BPS, DPS (annual only)
+    #     FP_BASIC_PRICES   → latest market price
+    cur.execute(f"""
+        WITH ltm_b AS (
+            SELECT FSYM_ID, DATE, CURRENCY,
+                   FF_MKT_VAL, FF_PE, FF_EBITDA_OPER,
+                   FF_EPS_DIL, FF_OPER_MGN,
+                   ROW_NUMBER() OVER (PARTITION BY FSYM_ID ORDER BY DATE DESC) AS rn
+            FROM FACTSET.FF_V3.FF_BASIC_DER_LTM
+            WHERE FSYM_ID IN ({ids_str})
+        ),
+        ltm_a AS (
+            SELECT FSYM_ID, DATE,
+                   FF_DIV_YLD       AS DIV_YLD_A,
+                   FF_EBIT_OPER_MGN,
+                   ROW_NUMBER() OVER (PARTITION BY FSYM_ID ORDER BY DATE DESC) AS rn
+            FROM FACTSET.FF_V3.FF_ADVANCED_DER_LTM
+            WHERE FSYM_ID IN ({ids_str})
+        ),
+        ann_der AS (
+            SELECT FSYM_ID, DATE,
+                   FF_PBK, FF_ROE, FF_NET_DEBT,
+                   ROW_NUMBER() OVER (PARTITION BY FSYM_ID ORDER BY DATE DESC) AS rn
+            FROM FACTSET.FF_V3.FF_BASIC_DER_AF
+            WHERE FSYM_ID IN ({ids_str})
+        ),
+        ann_act AS (
+            SELECT FSYM_ID, DATE,
+                   FF_BPS, FF_DPS,
+                   ROW_NUMBER() OVER (PARTITION BY FSYM_ID ORDER BY DATE DESC) AS rn
+            FROM FACTSET.FF_V3.FF_BASIC_AF
+            WHERE FSYM_ID IN ({ids_str})
+        ),
+        latest_px AS (
+            SELECT FSYM_ID, P_DATE, P_PRICE, CURRENCY AS PX_CCY,
+                   ROW_NUMBER() OVER (PARTITION BY FSYM_ID ORDER BY P_DATE DESC) AS rn
+            FROM FACTSET.FP_V2.FP_BASIC_PRICES
+            WHERE FSYM_ID IN ({ids_str})
+              AND P_DATE >= DATEADD(day, -30, CURRENT_DATE())
+        )
+        SELECT b.FSYM_ID, b.DATE, b.CURRENCY,
+               b.FF_MKT_VAL,
+               b.FF_PE,
+               b.FF_EBITDA_OPER,
+               b.FF_EPS_DIL,
+               b.FF_OPER_MGN,
+               a.DIV_YLD_A,
+               a.FF_EBIT_OPER_MGN,
+               ad.FF_PBK,
+               ad.FF_ROE,
+               ad.FF_NET_DEBT,
+               aa.FF_BPS,
+               aa.FF_DPS,
+               p.P_PRICE, p.PX_CCY
+        FROM ltm_b b
+        LEFT JOIN ltm_a    a  ON a.FSYM_ID  = b.FSYM_ID AND a.rn  = 1
+        LEFT JOIN ann_der  ad ON ad.FSYM_ID = b.FSYM_ID AND ad.rn = 1
+        LEFT JOIN ann_act  aa ON aa.FSYM_ID = b.FSYM_ID AND aa.rn = 1
+        LEFT JOIN latest_px p ON p.FSYM_ID  = b.FSYM_ID AND p.rn  = 1
+        WHERE b.rn = 1
+    """)
+    rows = cur.fetchall()
+    cols = ["FSYM_ID", "LTM_DATE", "CURRENCY",
+            "MKT_CAP_LOC",
+            "PE_LTM",
+            "EBITDA_LTM",
+            "EPS_LTM",
+            "OPM_LTM_BASIC",
+            "DIV_YLD_LTM",
+            "EBIT_MGN_LTM",
+            "PB_LTM",
+            "ROE_LTM",
+            "NET_DEBT_LOC",
+            "BPS_LTM",
+            "DPS_LTM",
+            "PRICE", "PX_CCY"]
+    df = pd.DataFrame(rows, columns=cols)
+    if df.empty:
+        return df
+
+    # Prefer EBIT margin from Advanced (OPM-style); fall back to Basic OPM
+    df["OPM_LTM"] = pd.to_numeric(df["EBIT_MGN_LTM"], errors="coerce")
+    df["OPM_LTM"] = df["OPM_LTM"].fillna(pd.to_numeric(df["OPM_LTM_BASIC"], errors="coerce"))
+
+    # ── 2) Ticker + Name lookup ─────────────────────────────────────────
+    cur.execute(f"""
+        SELECT tr.FSYM_ID, MIN(tr.TICKER_REGION) AS TICKER_REGION,
+               MAX(cov.PROPER_NAME)             AS NAME
+        FROM FACTSET.SYM_V1.SYM_TICKER_REGION tr
+        JOIN FACTSET.SYM_V1.SYM_COVERAGE cov ON cov.FSYM_ID = tr.FSYM_ID
+        WHERE tr.FSYM_ID IN ({ids_str})
+          AND cov.REGIONAL_FLAG = TRUE
+          AND cov.UNIVERSE_TYPE = 'EQ'
+        GROUP BY tr.FSYM_ID
+    """)
+    name_rows = cur.fetchall()
+    df_names = pd.DataFrame(name_rows, columns=["FSYM_ID", "TICKER", "NAME"])
+    df = df.merge(df_names, on="FSYM_ID", how="left")
+
+    # ── 3) Consensus FY1 + FY2 for all needed items ─────────────────────
+    items = ["EPS", "EBITDA", "EBIT", "SALES", "DPS", "BPS"]
+    items_str = ", ".join(f"'{it}'" for it in items)
+    cur.execute(f"""
+        WITH fcast AS (
+            SELECT FSYM_ID, FE_ITEM, FE_MEAN, FE_FP_END,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY FSYM_ID, FE_ITEM
+                       ORDER BY FE_FP_END ASC
+                   ) AS fy_rank
+            FROM FACTSET.FE_V4.FE_BASIC_CONH_AF
+            WHERE FSYM_ID IN ({ids_str})
+              AND FE_ITEM IN ({items_str})
+              AND FE_FP_END >= CURRENT_DATE()
+              AND CONS_END_DATE IS NULL
+        )
+        SELECT FSYM_ID, FE_ITEM, fy_rank, FE_MEAN, FE_FP_END
+        FROM fcast
+        WHERE fy_rank IN (1, 2)
+    """)
+    fc_rows = cur.fetchall()
+    df_fc = pd.DataFrame(fc_rows, columns=["FSYM_ID", "FE_ITEM", "FY_RANK", "FE_MEAN", "FE_FP_END"])
+
+    # Pivot to wide: one column per ITEM_FY
+    if not df_fc.empty:
+        df_fc["KEY"] = df_fc["FE_ITEM"] + "_FY" + df_fc["FY_RANK"].astype(str)
+        df_wide = df_fc.pivot_table(
+            index="FSYM_ID", columns="KEY", values="FE_MEAN", aggfunc="first"
+        ).reset_index()
+        df_wide.columns.name = None
+    else:
+        df_wide = pd.DataFrame({"FSYM_ID": list(fsym_ids)})
+
+    for col in [
+        "EPS_FY1", "EPS_FY2", "EBITDA_FY1", "EBITDA_FY2",
+        "EBIT_FY1", "EBIT_FY2", "SALES_FY1", "SALES_FY2",
+        "DPS_FY1", "DPS_FY2", "BPS_FY1", "BPS_FY2",
+    ]:
+        if col not in df_wide.columns:
+            df_wide[col] = None
+
+    df = df.merge(df_wide, on="FSYM_ID", how="left")
+
+    # ── 4) FX → USD ─────────────────────────────────────────────────────
+    needed_ccys = set(df["CURRENCY"].dropna().astype(str).tolist())
+    needed_ccys.update(df["PX_CCY"].dropna().astype(str).tolist())
+    needed_ccys.discard("USD")
+    fx_map = {"USD": 1.0}
+    if needed_ccys:
+        try:
+            ph = ",".join("'" + c + "'" for c in needed_ccys)
+            cur.execute(f"""
+                WITH ranked AS (
+                    SELECT ISO_CURRENCY_SYMBOL, SPOT_FX_EOD00D, CALC_DATE,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY ISO_CURRENCY_SYMBOL
+                               ORDER BY CALC_DATE DESC
+                           ) AS rn
+                    FROM MSCI.INDEX.CURRENCY_EXCHANGE_RATES
+                    WHERE ISO_CURRENCY_SYMBOL IN ({ph})
+                      AND CALC_DATE >= DATEADD(day, -10, CURRENT_DATE())
+                      AND SPOT_FX_EOD00D IS NOT NULL
+                )
+                SELECT ISO_CURRENCY_SYMBOL, SPOT_FX_EOD00D
+                FROM ranked WHERE rn = 1
+            """)
+            for ccy, rate in cur.fetchall():
+                if rate:
+                    # MSCI stores units of CCY per 1 USD → divide LOC by rate to get USD
+                    fx_map[ccy] = float(rate)
+        except Exception:
+            pass
+
+    def _to_usd(amount_loc, ccy):
+        if amount_loc is None or pd.isna(amount_loc):
+            return None
+        if ccy is None or ccy not in fx_map:
+            return None
+        rate = fx_map[ccy]
+        if rate == 0:
+            return None
+        return float(amount_loc) / rate  # LOC / (LOC per USD) = USD
+
+    # ── 5) Convert + compute ratios ─────────────────────────────────────
+    for c in [
+        "MKT_CAP_LOC", "PE_LTM", "PB_LTM", "DIV_YLD_LTM", "EBITDA_LTM",
+        "NET_DEBT_LOC", "EPS_LTM", "BPS_LTM", "OPM_LTM", "ROE_LTM",
+        "DPS_LTM", "PRICE",
+        "EPS_FY1", "EPS_FY2", "EBITDA_FY1", "EBITDA_FY2",
+        "EBIT_FY1", "EBIT_FY2", "SALES_FY1", "SALES_FY2",
+        "DPS_FY1", "DPS_FY2", "BPS_FY1", "BPS_FY2",
+    ]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    df["MKT_CAP_USD_M"]  = df.apply(lambda r: _to_usd(r["MKT_CAP_LOC"], r["CURRENCY"]), axis=1)
+    df["NET_DEBT_USD_M"] = df.apply(lambda r: _to_usd(r["NET_DEBT_LOC"], r["CURRENCY"]), axis=1)
+    df["EV_USD_M"]       = df["MKT_CAP_USD_M"] + df["NET_DEBT_USD_M"].fillna(0)
+
+    # EV in local currency (millions) — used to compute EV/EBITDA forward
+    df["EV_LOC_M"]       = df["MKT_CAP_LOC"] + df["NET_DEBT_LOC"].fillna(0)
+
+    # Forward P/E = Price / EPS_FYn
+    df["PE_FY1"] = (df["PRICE"] / df["EPS_FY1"]).where(df["EPS_FY1"] > 0)
+    df["PE_FY2"] = (df["PRICE"] / df["EPS_FY2"]).where(df["EPS_FY2"] > 0)
+
+    # Forward P/B: prefer consensus BPS if available; otherwise grow LTM BPS
+    #   by retained earnings (BPS_FY1 ≈ BPS_LTM + EPS_FY1*(1-payout))
+    # Most consensus data won't have BPS, so proxy with LTM BPS
+    bps_fy1 = df["BPS_FY1"].where(df["BPS_FY1"].notna(), df["BPS_LTM"])
+    bps_fy2 = df["BPS_FY2"].where(df["BPS_FY2"].notna(), df["BPS_LTM"])
+    df["PB_FY1"] = (df["PRICE"] / bps_fy1).where(bps_fy1 > 0)
+    df["PB_FY2"] = (df["PRICE"] / bps_fy2).where(bps_fy2 > 0)
+
+    # EV/EBITDA LTM
+    df["EV_EBITDA_LTM"] = (df["EV_LOC_M"] / df["EBITDA_LTM"]).where(df["EBITDA_LTM"] > 0)
+
+    # Forward EV/EBITDA: prefer consensus EBITDA; if not available, scale
+    # LTM EBITDA by EPS growth (proportional profitability assumption)
+    eps_growth_fy1 = (df["EPS_FY1"] / df["EPS_LTM"]).where(df["EPS_LTM"] > 0)
+    eps_growth_fy2 = (df["EPS_FY2"] / df["EPS_LTM"]).where(df["EPS_LTM"] > 0)
+    ebitda_fy1 = df["EBITDA_FY1"].fillna(df["EBITDA_LTM"] * eps_growth_fy1)
+    ebitda_fy2 = df["EBITDA_FY2"].fillna(df["EBITDA_LTM"] * eps_growth_fy2)
+    df["EV_EBITDA_FY1"] = (df["EV_LOC_M"] / ebitda_fy1).where(ebitda_fy1 > 0)
+    df["EV_EBITDA_FY2"] = (df["EV_LOC_M"] / ebitda_fy2).where(ebitda_fy2 > 0)
+
+    # Forward ROE proxy = EPS_FYn / BPS (%)
+    df["ROE_FY1"] = (df["EPS_FY1"] / bps_fy1 * 100).where(bps_fy1 > 0)
+    df["ROE_FY2"] = (df["EPS_FY2"] / bps_fy2 * 100).where(bps_fy2 > 0)
+
+    # Forward OPM proxy = if consensus EBIT available use it; else use EPS growth as directional hint
+    df["OPM_FY1"] = (df["EBIT_FY1"] / df["SALES_FY1"] * 100).where(df["SALES_FY1"] > 0)
+    # If no EBIT consensus, leave as NaN (user table shows "?" for these)
+
+    # Forward Div Yield = DPS_FY1 / Price (%)
+    df["DIV_YLD_FY1"] = (df["DPS_FY1"] / df["PRICE"] * 100).where(df["PRICE"] > 0)
+
+    # EPS Growth FY1 → FY2 and PEG
+    df["EPS_GR_FY12"] = (df["EPS_FY2"] / df["EPS_FY1"] - 1).where(df["EPS_FY1"] > 0) * 100
+    df["PEG"] = df["PE_FY1"] / df["EPS_GR_FY12"].where(df["EPS_GR_FY12"] != 0)
 
     return df

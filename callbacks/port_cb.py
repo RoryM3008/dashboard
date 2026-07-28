@@ -17,6 +17,8 @@ from portfolio import (
     import_csv, export_csv, compute_holdings, compute_portfolio_ts,
     set_cash_override, get_cash_override, clear_cash_override,
     set_price_override, clear_price_override, list_price_overrides,
+    set_holdings_override, delete_holdings_override,
+    clear_all_holdings_overrides, list_holdings_overrides,
     _resolve_ticker,
 )
 
@@ -731,6 +733,86 @@ def register_callbacks(app):
         c = get_theme(theme_mode or "dark")
         df = list_price_overrides()
         return _render_price_overrides_table(df, c)
+
+    # ── 2b) Holdings overrides ────────────────────────────────────────────
+    @app.callback(
+        Output("port-refresh-trigger", "data", allow_duplicate=True),
+        Output("port-hold-ovr-status", "children"),
+        Output("port-hold-ovr-ticker", "value"),
+        Output("port-hold-ovr-shares", "value"),
+        Output("port-hold-ovr-notes", "value"),
+        Input("port-hold-ovr-set", "n_clicks"),
+        Input("port-hold-ovr-remove", "n_clicks"),
+        Input("port-hold-ovr-clear-all", "n_clicks"),
+        State("port-hold-ovr-ticker", "value"),
+        State("port-hold-ovr-shares", "value"),
+        State("port-hold-ovr-notes", "value"),
+        State("port-refresh-trigger", "data"),
+        prevent_initial_call=True,
+    )
+    def manage_holdings_overrides(n_set, n_remove, n_clear_all, ticker, shares, notes, trigger):
+        ctx = dash.callback_context
+        if not ctx.triggered:
+            return no_update, no_update, no_update, no_update, no_update
+
+        action = ctx.triggered[0]["prop_id"].split(".")[0]
+
+        if action == "port-hold-ovr-clear-all":
+            clear_all_holdings_overrides()
+            return (trigger or 0) + 1, "✓ Cleared all holdings overrides.", "", None, ""
+
+        if not ticker or not ticker.strip():
+            return no_update, "⚠ Enter a ticker.", no_update, no_update, no_update
+
+        t = ticker.upper().strip()
+
+        if action == "port-hold-ovr-remove":
+            delete_holdings_override(t)
+            return (trigger or 0) + 1, f"✓ Removed override for {t} (reverted to calculated).", "", None, ""
+
+        # Set override
+        try:
+            sh = float(shares) if shares is not None else 0.0
+        except (ValueError, TypeError):
+            return no_update, "⚠ Enter a valid share count.", no_update, no_update, no_update
+
+        if sh < 0:
+            return no_update, "⚠ Shares cannot be negative.", no_update, no_update, no_update
+
+        set_holdings_override(t, sh, notes or "")
+        return (trigger or 0) + 1, f"✓ Override set: {t} = {sh:,.4f} shares", "", None, ""
+
+    @app.callback(
+        Output("port-hold-ovr-table", "children"),
+        Input("port-refresh-trigger", "data"),
+        State("theme-store", "data"),
+    )
+    def render_holdings_override_table(trigger, theme_mode):
+        c = get_theme(theme_mode or "dark")
+        df = list_holdings_overrides()
+        if df.empty:
+            return html.Div("No holdings overrides set.",
+                            style={"color": c["muted"], "fontSize": "0.72rem"})
+        hdr_style = {"color": c["subtext"], "fontSize": "0.68rem", "padding": "0.3rem 0.6rem",
+                     "borderBottom": f"1px solid {c['border']}", "fontWeight": "600",
+                     "textTransform": "uppercase", "letterSpacing": "0.04em"}
+        cell_style = {"color": c["text"], "fontSize": "0.78rem", "padding": "0.3rem 0.6rem",
+                      "borderBottom": f"1px solid {c['border']}"}
+        rows = []
+        for _, r in df.iterrows():
+            rows.append(html.Tr([
+                html.Td(r["ticker"], style=cell_style),
+                html.Td(f"{r['shares']:,.4f}", style=cell_style),
+                html.Td(r.get("notes", ""), style={**cell_style, "color": c["muted"]}),
+            ]))
+        return html.Table([
+            html.Thead(html.Tr([
+                html.Th("Ticker", style=hdr_style),
+                html.Th("Shares", style=hdr_style),
+                html.Th("Notes", style=hdr_style),
+            ])),
+            html.Tbody(rows),
+        ], style={"width": "100%", "borderCollapse": "collapse"})
 
     # ── 3) CSV import ─────────────────────────────────────────────────────
     @app.callback(

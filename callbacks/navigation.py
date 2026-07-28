@@ -23,6 +23,7 @@ def register_callbacks(app):
         Input("menu-performance", "n_clicks"),
         Input("menu-watchlist", "n_clicks"),
         Input("menu-markets", "n_clicks"),
+        Input("menu-stock-moves", "n_clicks"),
         Input("menu-prices", "n_clicks"),
         Input("menu-risk", "n_clicks"),
         Input("menu-port", "n_clicks"),
@@ -35,11 +36,13 @@ def register_callbacks(app):
         Input("menu-fundamentals", "n_clicks"),
         Input("menu-earnings", "n_clicks"),
         Input("menu-calendar", "n_clicks"),
+        Input("menu-factor-tilt", "n_clicks"),
+        Input("menu-comps", "n_clicks"),
+        Input("menu-mylist", "n_clicks"),
         State("menu-open", "data"),
     )
-    def toggle_menu(n_toggle, n_backdrop,
-                    n1,n2,n3,n4,n5,n6,n7,n8,n9,n10,n11,n12,n13,n14,n15,n16,n17,n18,n19,n20,
-                    is_open):
+    def toggle_menu(n_toggle, n_backdrop, *rest):
+        is_open = rest[-1] if rest else False
         ctx = dash.callback_context
         if not ctx.triggered:
             return False, _overlay_style(False), _backdrop_style(False)
@@ -64,6 +67,7 @@ def register_callbacks(app):
         Output("menu-performance", "style"),
         Output("menu-watchlist", "style"),
         Output("menu-markets", "style"),
+        Output("menu-stock-moves", "style"),
         Output("menu-prices", "style"),
         Output("menu-risk", "style"),
         Output("menu-port", "style"),
@@ -76,6 +80,9 @@ def register_callbacks(app):
         Output("menu-fundamentals", "style"),
         Output("menu-earnings", "style"),
         Output("menu-calendar", "style"),
+        Output("menu-factor-tilt", "style"),
+        Output("menu-comps", "style"),
+        Output("menu-mylist", "style"),
         Output("section-dashboard", "style"),
         Output("section-news", "style"),
         Output("section-analyser", "style"),
@@ -84,6 +91,7 @@ def register_callbacks(app):
         Output("section-performance", "style"),
         Output("section-watchlist", "style"),
         Output("section-markets", "style"),
+        Output("section-stock-moves", "style"),
         Output("section-prices", "style"),
         Output("section-risk", "style"),
         Output("section-port", "style"),
@@ -95,6 +103,9 @@ def register_callbacks(app):
         Output("section-fundamentals", "style"),
         Output("section-earnings", "style"),
         Output("section-calendar", "style"),
+        Output("section-factor-tilt", "style"),
+        Output("section-comps", "style"),
+        Output("section-mylist", "style"),
         Output("active-main-menu", "data"),
         Input("menu-dashboard", "n_clicks"),
         Input("menu-news", "n_clicks"),
@@ -104,6 +115,7 @@ def register_callbacks(app):
         Input("menu-performance", "n_clicks"),
         Input("menu-watchlist", "n_clicks"),
         Input("menu-markets", "n_clicks"),
+        Input("menu-stock-moves", "n_clicks"),
         Input("menu-prices", "n_clicks"),
         Input("menu-risk", "n_clicks"),
         Input("menu-port", "n_clicks"),
@@ -116,13 +128,15 @@ def register_callbacks(app):
         Input("menu-fundamentals", "n_clicks"),
         Input("menu-earnings", "n_clicks"),
         Input("menu-calendar", "n_clicks"),
+        Input("menu-factor-tilt", "n_clicks"),
+        Input("menu-comps", "n_clicks"),
+        Input("menu-mylist", "n_clicks"),
         Input("theme-store", "data"),
         State("active-main-menu", "data"),
     )
-    def set_main_menu(n_dashboard, n_news, n_analyser, n_screener, n_correlation,
-                      n_performance, n_watchlist, n_markets, n_prices, n_risk,
-                      n_port, n_heatmap, n_spread, n_ssa, n_financials, n_peers,
-                      n_valuations, n_fundamentals, n_earnings, n_calendar, theme_mode, current):
+    def set_main_menu(*args):
+        theme_mode = args[-2] if len(args) >= 2 else "dark"
+        current = args[-1] if len(args) >= 1 else "dashboard"
         ctx = dash.callback_context
         if not ctx.triggered:
             active = current or "dashboard"
@@ -142,22 +156,22 @@ def register_callbacks(app):
 
         # Menu button names (for styling)
         menu_names = ["dashboard", "news", "analyser", "screener", "correlation",
-                      "performance", "watchlist", "markets", "prices", "risk",
-                      "port", "heatmap", "spread", "ssa", "financials", "peers", "valuations", "fundamentals", "earnings", "calendar"]
+                      "performance", "watchlist", "markets", "stock-moves", "prices", "risk",
+                      "port", "heatmap", "spread", "ssa", "financials", "peers", "valuations", "fundamentals", "earnings", "calendar", "factor-tilt", "comps", "mylist"]
         # "ssa" and "financials" share the overview section highlight logic
         buttons = []
         for n in menu_names:
             is_active = (n == active) or (n in ("ssa", "financials") and active == "ssa")
             s = dict(btn_active if is_active else btn)
-            if n in ("ssa", "financials", "peers", "valuations", "fundamentals", "earnings", "calendar"):
+            if n in ("ssa", "financials", "peers", "valuations", "fundamentals", "earnings", "calendar", "factor-tilt", "comps"):
                 s["paddingLeft"] = "1.4rem"
                 s["fontSize"] = "0.72rem"
             buttons.append(s)
 
         # Section names (actual page sections)
         section_names = ["dashboard", "news", "analyser", "screener", "correlation",
-                         "performance", "watchlist", "markets", "prices", "risk",
-                         "port", "heatmap", "spread", "ssa", "peers", "valuations", "fundamentals", "earnings", "calendar"]
+                         "performance", "watchlist", "markets", "stock-moves", "prices", "risk",
+                         "port", "heatmap", "spread", "ssa", "peers", "valuations", "fundamentals", "earnings", "calendar", "factor-tilt", "comps", "mylist"]
         sections = [{"display": "block"} if n == active else {"display": "none"}
                     for n in section_names]
 

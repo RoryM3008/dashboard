@@ -524,8 +524,8 @@ def register_callbacks(app):
         try:
             df = fetch_valuation_history(fsym_id, years=max(years, 10))
         except Exception as e:
-            return (no_update,) * 4 + (no_update, no_update,
-                   f"❌ {e}")   # status last — wrong order, see below
+            return no_update, no_update, no_update, \
+                   f"❌ {e}", no_update, no_update, no_update
 
         # Fix order: (fig, summary, snapshot, status, ltm, ann, price)
         if df.empty:

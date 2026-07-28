@@ -33,6 +33,7 @@ from pages.correlation_page import build_correlation_section
 from pages.performance_page import build_performance_section
 from pages.watchlist_page import build_watchlist_section
 from pages.markets_page import build_markets_section
+from pages.stock_moves_page import build_stock_moves_section
 from pages.port_page import build_port_section
 from pages.prices_page import build_prices_section
 from pages.risk_page import build_risk_section
@@ -44,6 +45,9 @@ from pages.valuations_page import build_valuations_section
 from pages.fundamentals_page import build_fundamentals_section
 from pages.earnings_page import build_earnings_section
 from pages.calendar_page import build_calendar_section
+from pages.factor_tilt_page import build_factor_tilt_section
+from pages.comps_page import build_comps_section
+from pages.mylist_page import build_mylist_section
 import snowflake_data as _sf_mod
 
 # -- Callback modules (each has register_callbacks(app)) ----------------------
@@ -56,6 +60,7 @@ from callbacks import (
     performance_cb,
     watchlist_cb,
     markets_cb,
+    stock_moves_cb,
     port_cb,
     prices_cb,
     risk_cb,
@@ -67,6 +72,9 @@ from callbacks import (
     fundamentals_cb,
     earnings_cb,
     calendar_cb,
+    factor_tilt_cb,
+    comps_cb,
+    mylist_cb,
 )
 
 # -----------------------------------------------------------------------------
@@ -153,8 +161,10 @@ app.layout = html.Div(id="root-container", style={
             html.Button("Screener",       id="menu-screener",     n_clicks=0, style=MAIN_MENU_BTN),
             html.Button("Correlation",    id="menu-correlation",  n_clicks=0, style=MAIN_MENU_BTN),
             html.Button("Performance",    id="menu-performance",  n_clicks=0, style=MAIN_MENU_BTN),
+            html.Button("My Stocks",      id="menu-mylist",       n_clicks=0, style=MAIN_MENU_BTN),
             html.Button("Watchlist",      id="menu-watchlist",    n_clicks=0, style=MAIN_MENU_BTN),
             html.Button("Markets",        id="menu-markets",      n_clicks=0, style=MAIN_MENU_BTN),
+            html.Button("Stock Moves",    id="menu-stock-moves",  n_clicks=0, style=MAIN_MENU_BTN),
             html.Button("Portfolio",      id="menu-port",         n_clicks=0, style=MAIN_MENU_BTN),
             html.Button("Prices",         id="menu-prices",       n_clicks=0, style=MAIN_MENU_BTN),
             html.Button("Risk",           id="menu-risk",         n_clicks=0, style=MAIN_MENU_BTN),
@@ -177,6 +187,10 @@ app.layout = html.Div(id="root-container", style={
             html.Button("Earnings & Revisions", id="menu-earnings", n_clicks=0,
                         style={**MAIN_MENU_BTN, "paddingLeft": "1.4rem", "fontSize": "0.72rem"}),
             html.Button("Earnings Calendar", id="menu-calendar", n_clicks=0,
+                        style={**MAIN_MENU_BTN, "paddingLeft": "1.4rem", "fontSize": "0.72rem"}),
+            html.Button("Factor Tilt", id="menu-factor-tilt", n_clicks=0,
+                        style={**MAIN_MENU_BTN, "paddingLeft": "1.4rem", "fontSize": "0.72rem"}),
+            html.Button("Comps Table", id="menu-comps", n_clicks=0,
                         style={**MAIN_MENU_BTN, "paddingLeft": "1.4rem", "fontSize": "0.72rem"}),
             html.Hr(style={"borderColor": C["border"], "margin": "0.6rem 0"}),
             html.Div("Holdings", style={**LBL, "marginBottom": "0.3rem"},
@@ -219,6 +233,7 @@ app.layout = html.Div(id="root-container", style={
         build_performance_section(LBL, PANEL, C, FONT),
         build_watchlist_section(LBL, PANEL, C, FONT),
         build_markets_section(LBL, PANEL, C, FONT),
+        build_stock_moves_section(LBL, PANEL, C, FONT),
         build_port_section(LBL, PANEL, C, FONT),
         build_prices_section(LBL, PANEL, C, FONT),
         build_risk_section(LBL, PANEL, C, FONT),
@@ -230,6 +245,9 @@ app.layout = html.Div(id="root-container", style={
         build_fundamentals_section(LBL, PANEL, C, FONT),
         build_earnings_section(LBL, PANEL, C, FONT),
         build_calendar_section(LBL, PANEL, C, FONT),
+        build_factor_tilt_section(LBL, PANEL, C, FONT),
+        build_comps_section(LBL, PANEL, C, FONT),
+        build_mylist_section(LBL, PANEL, C, FONT),
     ], style={"width": "100%"}),
 
     dcc.Interval(id="auto-refresh", interval=5 * 60 * 1000, n_intervals=0),
@@ -246,6 +264,7 @@ correlation_cb.register_callbacks(app)
 performance_cb.register_callbacks(app)
 watchlist_cb.register_callbacks(app)
 markets_cb.register_callbacks(app)
+stock_moves_cb.register_callbacks(app)
 port_cb.register_callbacks(app)
 prices_cb.register_callbacks(app)
 risk_cb.register_callbacks(app)
@@ -257,6 +276,9 @@ valuations_cb.register_callbacks(app)
 fundamentals_cb.register_callbacks(app)
 earnings_cb.register_callbacks(app)
 calendar_cb.register_callbacks(app)
+factor_tilt_cb.register_callbacks(app, C=C, FONT=FONT)
+comps_cb.register_callbacks(app)
+mylist_cb.register_callbacks(app)
 
 # ── Theme toggle callback ────────────────────────────────────────────────────
 
@@ -271,7 +293,7 @@ def toggle_theme(n, current):
         # Initial load — return stored value (or default)
         mode = current or "dark"
     else:
-        mode = "light" if current == "dark" else "dark"
+        mode = "light" if current == "dark" else "dark" 
     icon = "☀️" if mode == "dark" else "🌙"
     return mode, icon
 

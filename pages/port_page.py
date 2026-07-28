@@ -339,6 +339,62 @@ def build_port_section(LBL, PANEL, C, FONT):
             ]),
         ], style=PANEL, className="theme-panel"),
 
+        # ── Holdings overrides (fix rounding remnants) ────────────────────
+        html.Div([
+            html.Details([
+                html.Summary("Holdings Overrides", style={
+                    "color": C["accent"], "fontSize": "0.78rem", "fontFamily": FONT,
+                    "fontWeight": "700", "cursor": "pointer", "letterSpacing": "0.03em",
+                }),
+                html.Div([
+                    html.Div("Override calculated share counts (e.g. set to 0 to remove rounding remnants).",
+                             style={"color": C["muted"], "fontSize": "0.72rem",
+                                    "fontFamily": FONT, "marginBottom": "0.6rem"}),
+                    html.Div([
+                        dcc.Input(id="port-hold-ovr-ticker", type="text", placeholder="Ticker e.g. IGUS.L",
+                                  className="theme-input",
+                                  style={"width": "120px", "fontSize": "0.8rem", "fontFamily": FONT,
+                                         "backgroundColor": C["bg"], "color": C["text"],
+                                         "border": f"1px solid {C['border']}", "borderRadius": "6px",
+                                         "padding": "0.3rem 0.5rem"}),
+                        dcc.Input(id="port-hold-ovr-shares", type="number", step=0.0001,
+                                  placeholder="Shares (0 = sold)",
+                                  className="theme-input",
+                                  style={"width": "130px", "fontSize": "0.8rem", "fontFamily": FONT,
+                                         "backgroundColor": C["bg"], "color": C["text"],
+                                         "border": f"1px solid {C['border']}", "borderRadius": "6px",
+                                         "padding": "0.3rem 0.5rem"}),
+                        dcc.Input(id="port-hold-ovr-notes", type="text", placeholder="Notes (optional)",
+                                  className="theme-input",
+                                  style={"width": "150px", "fontSize": "0.8rem", "fontFamily": FONT,
+                                         "backgroundColor": C["bg"], "color": C["text"],
+                                         "border": f"1px solid {C['border']}", "borderRadius": "6px",
+                                         "padding": "0.3rem 0.5rem"}),
+                        html.Button("Set Override", id="port-hold-ovr-set", n_clicks=0, style={
+                            "backgroundColor": C["blue"], "color": "#fff", "border": "none",
+                            "borderRadius": "8px", "padding": "0.35rem 0.8rem",
+                            "fontFamily": FONT, "fontWeight": "700", "fontSize": "0.75rem",
+                            "cursor": "pointer"}),
+                        html.Button("Remove", id="port-hold-ovr-remove", n_clicks=0, style={
+                            "backgroundColor": "transparent", "color": C["muted"],
+                            "border": f"1px solid {C['border']}",
+                            "borderRadius": "8px", "padding": "0.35rem 0.8rem",
+                            "fontFamily": FONT, "fontWeight": "600", "fontSize": "0.75rem",
+                            "cursor": "pointer"}),
+                        html.Button("Clear All", id="port-hold-ovr-clear-all", n_clicks=0, style={
+                            "backgroundColor": "transparent", "color": C["red"],
+                            "border": f"1px solid {C['red']}",
+                            "borderRadius": "8px", "padding": "0.35rem 0.8rem",
+                            "fontFamily": FONT, "fontWeight": "600", "fontSize": "0.75rem",
+                            "cursor": "pointer"}),
+                    ], style={"display": "flex", "alignItems": "center", "gap": "0.45rem", "flexWrap": "wrap"}),
+                    html.Div(id="port-hold-ovr-status", style={"color": C["muted"], "fontSize": "0.72rem",
+                             "fontFamily": FONT, "marginTop": "0.5rem"}),
+                    html.Div(id="port-hold-ovr-table", style={"overflowX": "auto", "marginTop": "0.6rem"}),
+                ], style={"marginTop": "0.6rem"}),
+            ]),
+        ], style=PANEL, className="theme-panel"),
+
         # ── Performance chart ─────────────────────────────────────────────
         html.Div([
             html.Div("Portfolio Performance", style={**LBL, "marginBottom": "0.4rem"},
